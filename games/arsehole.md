@@ -20,7 +20,7 @@ Some variations don't allow you to play a Sweeper when no value is currently set
 - 3-9: the number cards from 3-9 have their usual value.
 - J-K, A: The picture cards have their numeric values (11, 12 and 13) and then the ace comes after.
 - 2: 2 is the highest number card.
-- 10, J: 10s and Jokers are Sweeper cards. Some variations allow the Joker to counter-Sweep a 10.
+- 10, Joker: 10s and Jokers are Sweeper cards. Some variations allow the Joker to counter-Sweep a 10.
 
 ## Keywords
 
