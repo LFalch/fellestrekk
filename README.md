@@ -1,2 +1,4 @@
 # kortari
-Working title card game hub, other names: kortspæl, kort, kortspil, arsehole, cardhub
+Working title card game hub
+
+Name ideas: kortspæl, kort, kortspil, sammentreff/sammentræf, fællestræk, fellstrekk, arsehole, cardhub
