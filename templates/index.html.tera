@@ -8,4 +8,7 @@
 <p>
     Shit, fuck, {{name}}
 </p>
+<p>
+    <a href="/static/websockets.html">Websockets</a>
+</p>
 {% endblock content %}
