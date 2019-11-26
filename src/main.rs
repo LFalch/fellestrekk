@@ -23,14 +23,6 @@ fn index() -> Template {
     Template::render("index", &context)
 }
 
-#[get("/<name>")]
-fn article(name: String) -> Template {
-    let context = TemplateContext {
-        name,
-    };
-    Template::render("index", &context)
-}
-
 #[get("/ip")]
 fn ip(addr: SocketAddr) -> String {
     format!("{}\n", addr.ip())
@@ -59,12 +51,11 @@ fn not_found(req: &Request) -> Template {
 fn rocket() -> rocket::Rocket {
     rocket::ignite()
         // Have Rocket manage the database pool.
-        .mount("/static", StaticFiles::from("static"))
+        .mount("/", StaticFiles::from("static"))
         .mount(
             "/",
             routes![
                 index,
-                article,
                 ip,
                 ip_json,
             ],
@@ -112,12 +103,12 @@ fn main() {
 
                     {
                         let msgs = messages.lock().unwrap();
-                            
-                            while msgs.len() > num_messages {
-                                let msg_to_send = OwnedMessage::Text(msgs[num_messages].clone());
-                                sender.send_message(&msg_to_send).unwrap();
-                                num_messages += 1;
-                            }
+                        
+                        while msgs.len() > num_messages {
+                            let msg_to_send = OwnedMessage::Text(msgs[num_messages].clone());
+                            sender.send_message(&msg_to_send).unwrap();
+                            num_messages += 1;
+                        }
                     }
 
                     match message {

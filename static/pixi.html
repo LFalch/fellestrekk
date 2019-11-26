@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Hello World</title>
+</head>
+<script src="pixi/pixi.min.js"></script>
+<body>
+    <script type="text/javascript">
+        function randomInt(min, max) {
+            if (!max) {
+                max = min;
+                min = 0;
+            }
+
+            return Math.floor(Math.random() * (max-min) + min);
+        }
+
+        let app = new PIXI.Application({ width: 800, height: 600 });
+
+        //Add the canvas that Pixi automatically created for you to the HTML document
+        document.body.appendChild(app.view);
+
+        PIXI.Loader.shared.add("cards.png").load(setup);
+
+        let suits;
+
+        function setup() {
+            const cards_tex = PIXI.Loader.shared.resources["cards.png"].texture.baseTexture
+            suits = [];
+            for (let y = 0; y < cards_tex.height; y += 96) {
+                let cards = [];
+                for (let x = 0; x < cards_tex.width; x += 72) {
+                    const card_tex = new PIXI.Texture(cards_tex, new PIXI.Rectangle(x, y, 72, 95));
+                    const card_sprite = new PIXI.Sprite(card_tex);
+                    cards.push(card_sprite);
+                }
+                suits.push(cards);
+            }
+            suits.__proto__.getCard = function(c) {
+                const i = c % 13;
+                const j = Math.floor(c / 13);
+
+                return this[j][i]
+            }
+            randomCard();
+        }
+
+        function randomCard() {
+            app.stage.removeChildren();
+            app.stage.addChild(suits.getCard(randomInt(52)));
+        }
+
+        app.view.addEventListener('click', randomCard);
+    </script>
+</body>
+</html>
