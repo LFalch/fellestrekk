@@ -74,6 +74,7 @@ use std::sync::{Arc, Mutex};
 fn main() {
     thread::spawn(|| {
         let server = Server::bind("127.0.0.1:2794").unwrap();
+        const PROTOCOL: &str = "fellestrekk-rs";
 
         let messages = Arc::new(Mutex::new(Vec::<String>::new()));
 
@@ -82,12 +83,12 @@ fn main() {
             // Spawn a new thread for each connection.
             thread::spawn(move || {
                 let mut num_messages = messages.lock().unwrap().len();
-                if !request.protocols().contains(&"rust-websocket".to_string()) {
+                if !request.protocols().contains(&PROTOCOL.to_owned()) {
                     request.reject().unwrap();
                     return;
                 }
 
-                let client = request.use_protocol("rust-websocket").accept().unwrap();
+                let client = request.use_protocol(PROTOCOL).accept().unwrap();
 
                 let ip = client.peer_addr().unwrap();
 

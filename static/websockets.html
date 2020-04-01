@@ -8,7 +8,7 @@
 
 <body>
     <script>
-        var socket = new WebSocket("ws://127.0.0.1:2794", "rust-websocket");
+        var socket = new WebSocket("ws://127.0.0.1:2794", "fellestrekk-rs");
         socket.onmessage = function (event) {
             var received = document.getElementById("received");
             var br = document.createElement("BR");
