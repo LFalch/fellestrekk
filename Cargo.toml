@@ -3,11 +3,13 @@ name = "fellestrekk"
 version = "0.1.0"
 authors = ["LFalch <lucas@wasd.dk>"]
 edition = "2018"
+default-run = "fellestrekk"
 
 [dependencies]
 rocket = "0.4.2"
 rocket_contrib = {version = "0.4.2", features = ["tera_templates"]}
 serde = "1"
 serde_derive = "1"
-rand = "0.7"
+rand = "0.8"
 websocket = "0.24"
+collect_result = "0.1.1"

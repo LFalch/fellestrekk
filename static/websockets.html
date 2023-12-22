@@ -8,7 +8,7 @@
 
 <body>
     <script>
-        var socket = new WebSocket("ws://127.0.0.1:2794", "fellestrekk-rs");
+        var socket = new WebSocket(`ws://${document.location.hostname}:2794`, "fellestrekk");
         socket.onmessage = function (event) {
             var received = document.getElementById("received");
             var br = document.createElement("BR");
