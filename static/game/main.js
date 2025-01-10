@@ -17,6 +17,8 @@ PIXI.Loader.shared.add("cards.png").load(setup);
 let CARD;
 let socket;
 let statusText;
+let dealerHandText;
+let playerHandText;
 
 function setup() {
     socket = new WebSocket(`ws://${document.location.hostname}:2794`, "fellestrekk");
@@ -61,6 +63,13 @@ function setup() {
     }
 
     app.ticker.add(mkGmLoop(consistentLogic));
+
+    playerHandText = new PIXI.Text('Value: ', {fontFamily:'Arial',fontSize:20, fill: 0xffffff, align: 'left'});
+    dealerHandText = new PIXI.Text('Value: ', {fontFamily:'Arial',fontSize:20, fill: 0xffffff, align: 'left'});
+    playerHandText.position = {x: 4, y: 495};
+    dealerHandText.position = {x: 4, y: 295};
+    app.stage.addChild(playerHandText);
+    app.stage.addChild(dealerHandText);
 
     statusText = new PIXI.Text('[H]it [S]tand', {fontFamily:'Arial',fontSize:20, fill: 0xffffff, align: 'left'});
     statusText.position = {x: 4, y: 572};
@@ -149,15 +158,23 @@ function onMessage(event) {
         dealer_card_n = 0;
         cards.forEach(spr => app.stage.removeChild(spr));
         cards = [];
+    } else if (event.data.startsWith('VALUEUPDATE ')) {
+        const args = event.data.substr(12).split(' ');
+        const soft = args[args.length-1] == 'soft';
+        const value = Number(args[args.length-(soft?2:1)]);
+        let text;
+        if (args.length > (soft?2:1)) {
+            text = playerHandText;
+        } else {
+            text = dealerHandText;
+        }
+        text.text = `Value: ${value}`;
+        if (soft) text.text += ` or ${value - 10}`;
     } else if (event.data.startsWith('STATUS ')) {
         const args = event.data.substr(7).split(' ');
-        const value = Number(args.shift());
-        statusText.text = `Value: ${value}`;
+        statusText.text = ' ';
         for (const arg of args) {
             switch (arg) {
-                case 'soft':
-                    statusText.text += ` or ${value-10}`;
-                    break;
                 case 'H':
                     statusText.text += " [H]it";
                     break;

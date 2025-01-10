@@ -129,13 +129,17 @@ impl Game {
             self.dealer_hand = Hand::new([down_dealer, open_dealer]);
             self.player_hand = Hand::new([down_player, open_player]);
 
+            let hand = Hand::new([open_dealer]);
+
+            send(Command::ValueUpdate(None, hand.value(), hand.is_soft()));
             send(Command::DownCard(down_player));
             send(Command::PlayerDraw(0, open_player));
             send(Command::DealerDraw(self.dealer_hand.cards()[1]));
 
             let split = self.player_hand.cards()[0].suit_rank().1 == self.player_hand.cards()[1].suit_rank().1;
 
-            send(Command::Status { value: self.player_hand.value(), soft: self.player_hand.is_soft(), hit: true, stand: true, double: true, surrender: true, split, new_game: false });
+            send(Command::ValueUpdate(Some(0), self.player_hand.value(), self.player_hand.is_soft()));
+            send(Command::Status { hit: true, stand: true, double: true, surrender: true, split, new_game: false });
         }
 
         if self.dealer_turn && !self.game_over {
@@ -146,6 +150,7 @@ impl Game {
             }
             self.game_over = true;
             send(Command::RevealDowns(self.dealer_hand.cards()[0], vec![self.player_hand.cards()[0]]));
+            send(Command::ValueUpdate(None, self.dealer_hand.value(), self.dealer_hand.is_soft()));
             if self.player_hand.value() > 21 {
                 send(Command::Lose);
             } else if self.dealer_hand.value() > 21 {
@@ -179,15 +184,16 @@ impl Game {
         send(Command::PlayerDraw(pn, card));
 
         let value = self.player_hand.value();
+        send(Command::ValueUpdate(Some(0), value, self.player_hand.is_soft()));
         if self.player_hand.value() > 21 {
             self.dealer_turn = true;
-            send(Command::Status { value, soft: self.player_hand.is_soft(), hit: false, stand: false, double: false, surrender: false, split: false, new_game: true })
+            send(Command::Status { hit: false, stand: false, double: false, surrender: false, split: false, new_game: true })
         } else {
-            send(Command::Status { value, soft: self.player_hand.is_soft(), hit: true, stand: true, double: true, surrender: false, split: false, new_game: false })
+            send(Command::Status { hit: true, stand: true, double: true, surrender: false, split: false, new_game: false })
         }
     }
     fn stand(&mut self, _pn: usize, mut send: impl FnMut(Command)) {
-        send(Command::Status { value: self.player_hand.value(), soft: self.player_hand.is_soft(), hit: false, stand: false, double: false, surrender: false, split: false, new_game: true });
+        send(Command::Status { hit: false, stand: false, double: false, surrender: false, split: false, new_game: true });
         self.dealer_turn = true;
     }
     fn has_space(&self) -> bool {
@@ -210,12 +216,11 @@ enum Command {
     PlayerDraw(usize, Card),
     DeckSize(u8),
     // Blackjack
+    ValueUpdate(Option<usize>, u8, bool),
     DealerDraw(Card),
     RevealDowns(Card, Vec<Card>),
     DownCard(Card),
     Status{
-        value: u8,
-        soft: bool,
         hit: bool,
         stand: bool,
         double: bool,
@@ -275,10 +280,20 @@ impl FromStr for Command {
             "DOUBLEDOWN" => Ok(Command::DoubleDown),
             "SURRENDER" => Ok(Command::Surrender),
             "SPLIT" => Ok(Command::Split),
+            "VALUEUPDATE" => {
+                let mut iter = split.rev();
+                let last = iter.next().ok_or(())?;
+                let soft = last == "soft";
+                let value = if soft {
+                    iter.next().ok_or(())?
+                } else {
+                    last
+                }.parse().map_err(|_| ())?;
+                let pn = iter.next().and_then(|pn| pn.parse().ok());
+                Ok(Command::ValueUpdate(pn, value, soft))
+            }
             "STATUS" => {
-                let value = split.next().ok_or(())?.parse().map_err(|_| ())?;
                 let iter = split;
-                let mut soft = false;
                 let mut hit = false;
                 let mut stand = false;
                 let mut double = false;
@@ -288,7 +303,6 @@ impl FromStr for Command {
 
                 for s in iter {
                     match s {
-                        "soft" => soft = true,
                         "H" => hit = true,
                         "S" => stand = true,
                         "D" => double = true,
@@ -298,7 +312,7 @@ impl FromStr for Command {
                         _ => return Err(()),
                     }
                 }
-                Ok(Command::Status { value, soft, hit, stand, double, surrender, split, new_game })
+                Ok(Command::Status { hit, stand, double, surrender, split, new_game })
             }
             "CHAT_MSG" => Ok(Command::ChatMsg(
                 split.next().ok_or(())?.to_owned(),
@@ -345,11 +359,19 @@ impl Display for Command {
             Command::DoubleDown => write!(f, "DOUBLEDOWN"),
             Command::Surrender => write!(f, "SURRENDER"),
             Command::Split => write!(f, "SPLIT"),
-            &Command::Status { value, soft, hit, stand, double, surrender, split, new_game } => {
-                write!(f, "STATUS {value}")?;
+            &Command::ValueUpdate(pn, value, soft) => {
+                write!(f, "VALUEUPDATE")?;
+                if let Some(pn) = pn {
+                    write!(f, " {pn}")?;
+                }
+                write!(f, " {value}")?;
                 if soft {
                     write!(f, " soft")?;
                 }
+                Ok(())
+            }
+            &Command::Status { hit, stand, double, surrender, split, new_game } => {
+                write!(f, "STATUS")?;
                 if hit {
                     write!(f, " H")?;
                 }
