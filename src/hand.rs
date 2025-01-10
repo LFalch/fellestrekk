@@ -3,30 +3,25 @@ use crate::card::Card;
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Hand {
     cards: Vec<Card>,
-    dirty: bool,
     soft: bool,
     value: u8,
 }
 
 impl Hand {
     pub fn new<const N: usize>(cards: [Card; N]) -> Self {
-        Hand {
+        let mut h = Hand {
             cards: cards.to_vec(),
-            dirty: true,
             .. Default::default()
-        }
+        };
+        h.update();
+        h
     }
-    fn clean(&mut self) {
-        if self.dirty {
-            let (v, s) = value_with_soft(&self.cards);
-            self.soft = s;
-            self.value = v;
-
-            self.dirty = false;
-        }
+    fn update(&mut self) {
+        let (v, s) = value_with_soft(&self.cards);
+        self.soft = s;
+        self.value = v;
     }
-    pub fn print(&mut self) {
-        self.clean();
+    pub fn print(&self) {
         for card in &self.cards {
             print!(" {card}");
         }
@@ -37,17 +32,15 @@ impl Hand {
         }
         println!();
     }
-    pub fn is_soft(&mut self) -> bool {
-        self.clean();
+    pub fn is_soft(&self) -> bool {
         self.soft
     }
-    pub fn value(&mut self) -> u8 {
-        self.clean();
+    pub fn value(&self) -> u8 {
         self.value
     }
     pub fn add_card(&mut self, card: Card) {
         self.cards.push(card);
-        self.dirty = true;
+        self.update();
     }
     pub fn cards(&self) -> &[Card] {
         &self.cards

@@ -4,6 +4,7 @@ use websocket::sync::Server;
 use websocket::receiver::Reader;
 use websocket::sender::Writer;
 
+use std::cmp::Ordering::{Equal, Greater, Less};
 use std::thread::{Builder, sleep};
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
@@ -18,6 +19,7 @@ use collect_result::CollectResult;
 
 use crate::card::{Card, Deck};
 use crate::hand::Hand;
+use crate::dealer::Dealer;
 
 type WsReader = Reader<TcpStream>;
 type WsWriter = Writer<TcpStream>;
@@ -49,47 +51,20 @@ impl Session {
     fn handle(&mut self) -> WebSocketResult<()> {
         let mut cmds = Vec::new();
 
-        // CHECK ONLY WHEN NEW GAME STARTS
-        if self.game.deck.size() < 20 {
-            self.game.deck = Deck::new_standard();
-            self.game.deck.shuffle();
-            self.game.dirty_deck = true;
-        }
+        self.game.tick(|cmd: Command| cmds.push(cmd.into_message()));
 
-        if self.game.dealer_hand.cards().is_empty() {
-            let hole_player = self.game.deck.draw_one().unwrap();
-            let hole_dealer = self.game.deck.draw_one().unwrap();
-            let open_player = self.game.deck.draw_one().unwrap();
-            let open_dealer = self.game.deck.draw_one().unwrap();
-
-            self.game.dealer_hand = Hand::new([hole_dealer, open_dealer]);
-            self.game.player_hand = Hand::new([hole_player, open_player]);
-
-            let pcards = self.game.player_hand.cards();
-            cmds.push(Command::HoleCards(pcards[0], pcards[1..].to_vec()).into_message());
-            cmds.push(Command::DealerHole(self.game.dealer_hand.cards()[0]).into_message());
-        }
-
-        if self.game.dirty_deck {
-            self.game.dirty_deck = false;
-            cmds.push(Command::DeckSize(self.game.deck.size() as u8).into_message());
-        }
-
-        for player in &mut self.players {
+        for (i, player) in self.players.iter_mut().enumerate() {
             for cmd in &cmds {
                 player.1.send_message(cmd)?;
             }
 
             match handle(&mut player.0, &mut player.1)? {
-                Command::Hit => {
-                    if let Some(card) = self.game.deck.draw_one() {
-                        self.game.dirty_deck = true;
-                        player.1.send_message(&Command::Drawn(card).into_message())?;
+                Command::Hit => self.game.hit(i, |cmd: Command| player.1.send_message(&cmd.into_message()).unwrap()),
+                Command::Stand => self.game.stand(i, |cmd: Command| player.1.send_message(&cmd.into_message()).unwrap()),
+                Command::Start => {
+                    if self.game.game_over {
+                        self.game.dealer_hand = Hand::new([]);
                     }
-                }
-                Command::Stand => {
-                    self.game.dealer_hand = Hand::new([]);
-                    player.1.send_message(&Command::Lose.into_message())?;
                 }
                 _ => (),
             }
@@ -116,7 +91,11 @@ pub struct  Game {
     dealer_hand: Hand,
     player_hand: Hand,
     dirty_deck: bool,
+    game_over: bool,
+    dealer_turn: bool,
+    dealer: Dealer
 }
+// TODO: implement naturals (blackjacks)
 impl Game {
     fn new() -> Game {
         Game {
@@ -124,7 +103,92 @@ impl Game {
             dealer_hand: Hand::new([]),
             player_hand: Hand::new([]),
             dirty_deck: true,
+            game_over: true,
+            dealer_turn: false,
+            dealer: Dealer::h17(),
         }
+    }
+    fn draw_card(&mut self) -> Card {
+        self.dirty_deck = true;
+        self.deck.draw_one().unwrap()
+    }
+    fn tick(&mut self, mut send: impl FnMut(Command)) {
+        if self.dealer_hand.cards().is_empty() {
+            send(Command::Start);
+            self.game_over = false;
+            self.dealer_turn = false;
+            if self.deck.size() < 20 {
+                self.deck = Deck::new_standard();
+                self.deck.shuffle();
+            }
+            let down_player = self.draw_card();
+            let down_dealer = self.draw_card();
+            let open_player = self.draw_card();
+            let open_dealer = self.draw_card();
+
+            self.dealer_hand = Hand::new([down_dealer, open_dealer]);
+            self.player_hand = Hand::new([down_player, open_player]);
+
+            send(Command::DownCard(down_player));
+            send(Command::PlayerDraw(0, open_player));
+            send(Command::DealerDraw(self.dealer_hand.cards()[1]));
+
+            let split = self.player_hand.cards()[0].suit_rank().1 == self.player_hand.cards()[1].suit_rank().1;
+
+            send(Command::Status { value: self.player_hand.value(), soft: self.player_hand.is_soft(), hit: true, stand: true, double: true, surrender: true, split, new_game: false });
+        }
+
+        if self.dealer_turn && !self.game_over {
+            while self.dealer.hits(&self.dealer_hand) {
+                let card = self.draw_card();
+                self.dealer_hand.add_card(card);
+                send(Command::DealerDraw(card));
+            }
+            self.game_over = true;
+            send(Command::RevealDowns(self.dealer_hand.cards()[0], vec![self.player_hand.cards()[0]]));
+            if self.player_hand.value() > 21 {
+                send(Command::Lose);
+            } else if self.dealer_hand.value() > 21 {
+                send(Command::Win);
+            } else {
+                match self.player_hand.value().cmp(&self.dealer_hand.value()) {
+                    Equal => {
+                        send(Command::Draw);
+                    }
+                    Greater => {
+                        send(Command::Win);
+                    }
+                    Less => {
+                        send(Command::Lose);
+                    }
+                }
+            }
+        }
+
+        if self.dirty_deck {
+            self.dirty_deck = false;
+            send(Command::DeckSize(self.deck.size() as u8));
+        }
+    }
+    fn hit(&mut self, pn: usize, mut send: impl FnMut(Command)) {
+        if self.dealer_turn || self.game_over {
+            return;
+        }
+        let card = self.draw_card();
+        self.player_hand.add_card(card);
+        send(Command::PlayerDraw(pn, card));
+
+        let value = self.player_hand.value();
+        if self.player_hand.value() > 21 {
+            self.dealer_turn = true;
+            send(Command::Status { value, soft: self.player_hand.is_soft(), hit: false, stand: false, double: false, surrender: false, split: false, new_game: true })
+        } else {
+            send(Command::Status { value, soft: self.player_hand.is_soft(), hit: true, stand: true, double: true, surrender: false, split: false, new_game: false })
+        }
+    }
+    fn stand(&mut self, _pn: usize, mut send: impl FnMut(Command)) {
+        send(Command::Status { value: self.player_hand.value(), soft: self.player_hand.is_soft(), hit: false, stand: false, double: false, surrender: false, split: false, new_game: true });
+        self.dealer_turn = true;
     }
     fn has_space(&self) -> bool {
         false
@@ -143,11 +207,22 @@ enum Command {
     JoinOk(u16, Option<String>),
     Start,
     Draw,
-    Drawn(Card),
+    PlayerDraw(usize, Card),
     DeckSize(u8),
     // Blackjack
-    DealerHole(Card),
-    HoleCards(Card, Vec<Card>),
+    DealerDraw(Card),
+    RevealDowns(Card, Vec<Card>),
+    DownCard(Card),
+    Status{
+        value: u8,
+        soft: bool,
+        hit: bool,
+        stand: bool,
+        double: bool,
+        surrender: bool,
+        split: bool,
+        new_game: bool,
+    },
     Stand,
     Hit,
     DoubleDown,
@@ -178,24 +253,53 @@ impl FromStr for Command {
             "JOIN_OK" => Ok(Command::JoinOk(u16::from_str_radix(split.next().ok_or(())?, 16).map_err(|_| ())?, split.next().map(|s| s.to_owned()))),
             "START" => Ok(Command::Start),
             "DRAW" => Ok(Command::Draw),
-            "DRAWN" => Ok(Command::Drawn(
+            "REVEALDOWNS" => Ok(Command::RevealDowns(
+                Card::from_u8(split.next().ok_or(())?.parse().map_err(|_| ())?),
+                split.map(|c| c.parse().map_err(|_| ()).map(Card::from_u8)).collect_result::<Vec<_>>()?,
+            )),
+            "PLAYERDRAW" => Ok(Command::PlayerDraw(
+                usize::from_str(split.next().ok_or(())?).map_err(|_| ())?,
                 Card::from_u8(split.next().ok_or(())?.parse().map_err(|_| ())?)
             )),
             "DECKSIZE" => Ok(Command::DeckSize(
                 split.next().ok_or(())?.parse().map_err(|_| ())?
             )),
-            "DEALERHOLE" => Ok(Command::DealerHole(
+            "DEALERDRAW" => Ok(Command::DealerDraw(
                 Card::from_u8(split.next().ok_or(())?.parse().map_err(|_| ())?)
             )),
-            "HOLECARDS" => Ok(Command::HoleCards(
+            "DOWNCARD" => Ok(Command::DownCard(
                 Card::from_u8(split.next().ok_or(())?.parse().map_err(|_| ())?),
-                split.map(|c| c.parse().map_err(|_| ()).map(Card::from_u8)).collect_result::<Vec<_>>()?,
             )),
             "STAND" => Ok(Command::Stand),
             "HIT" => Ok(Command::Hit),
             "DOUBLEDOWN" => Ok(Command::DoubleDown),
             "SURRENDER" => Ok(Command::Surrender),
             "SPLIT" => Ok(Command::Split),
+            "STATUS" => {
+                let value = split.next().ok_or(())?.parse().map_err(|_| ())?;
+                let iter = split;
+                let mut soft = false;
+                let mut hit = false;
+                let mut stand = false;
+                let mut double = false;
+                let mut surrender = false;
+                let mut split = false;
+                let mut new_game = false;
+
+                for s in iter {
+                    match s {
+                        "soft" => soft = true,
+                        "H" => hit = true,
+                        "S" => stand = true,
+                        "D" => double = true,
+                        "U" => surrender = true,
+                        "P" => split = true,
+                        "N" => new_game = true,
+                        _ => return Err(()),
+                    }
+                }
+                Ok(Command::Status { value, soft, hit, stand, double, surrender, split, new_game })
+            }
             "CHAT_MSG" => Ok(Command::ChatMsg(
                 split.next().ok_or(())?.to_owned(),
                 split.collect::<Vec<&str>>().join(" ")
@@ -222,11 +326,15 @@ impl Display for Command {
             Command::JoinOk(c, None) => write!(f, "JOIN_OK {c:X}"),
             Command::Start => write!(f, "START"),
             Command::Draw => write!(f, "DRAW"),
-            Command::Drawn(c) => write!(f, "DRAWN {c}"),
+            Command::PlayerDraw(p, c) => write!(f, "PLAYERDRAW {p} {c}"),
             Command::DeckSize(n) => write!(f, "DECKSIZE {n}"),
-            Command::DealerHole(c) => write!(f, "DEALERHOLE {c}"),
-            Command::HoleCards(d, ps) => {
-                write!(f, "HOLECARDS {d}")?;
+            Command::DealerDraw(c) => write!(f, "DEALERDRAW {c}"),
+            Command::DownCard(c) => {
+                write!(f, "DOWNCARD {c}")?;
+                Ok(())
+            }
+            Command::RevealDowns(c, ps) => {
+                write!(f, "REVEALDOWNS {c}")?;
                 for p in ps {
                     write!(f, " {p}")?;
                 }
@@ -237,6 +345,31 @@ impl Display for Command {
             Command::DoubleDown => write!(f, "DOUBLEDOWN"),
             Command::Surrender => write!(f, "SURRENDER"),
             Command::Split => write!(f, "SPLIT"),
+            &Command::Status { value, soft, hit, stand, double, surrender, split, new_game } => {
+                write!(f, "STATUS {value}")?;
+                if soft {
+                    write!(f, " soft")?;
+                }
+                if hit {
+                    write!(f, " H")?;
+                }
+                if stand {
+                    write!(f, " S")?;
+                }
+                if double {
+                    write!(f, " D")?;
+                }
+                if surrender {
+                    write!(f, " U")?;
+                }
+                if split {
+                    write!(f, " P")?;
+                }
+                if new_game {
+                    write!(f, " N")?;
+                }
+                Ok(())
+            }
             Command::ChatMsg(p, m) => write!(f, "CHAT_MSG {p} {m}"),
             Command::Chat(m) => write!(f, "CHAT {m}"),
             Command::Win => write!(f, "WIN"),

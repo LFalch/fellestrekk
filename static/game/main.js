@@ -16,6 +16,7 @@ PIXI.Loader.shared.add("cards.png").load(setup);
 
 let CARD;
 let socket;
+let statusText;
 
 function setup() {
     socket = new WebSocket(`ws://${document.location.hostname}:2794`, "fellestrekk");
@@ -60,18 +61,37 @@ function setup() {
     }
 
     app.ticker.add(mkGmLoop(consistentLogic));
+
+    statusText = new PIXI.Text('[H]it [S]tand', {fontFamily:'Arial',fontSize:20, fill: 0xffffff, align: 'left'});
+    statusText.position = {x: 4, y: 572};
+    app.stage.addChild(statusText);
 }
 
 let deck = [];
 let cards = [];
 
-app.view.addEventListener('click', () => socket.send("HIT"));
 window.addEventListener('keydown', (event) => onKeyDown(event), false);
 
 function onKeyDown(event) {
-    console.log(event);
-    if (event.code == 'KeyS') {
-        socket.send("STAND");
+    switch (event.code) {
+        case 'KeyS':
+            socket.send("STAND");
+            break;
+        case 'KeyH':
+            socket.send("HIT");
+            break;
+        case 'KeyD':
+            socket.send("DOUBLEDOWN");
+            break;
+        case 'KeyU':
+            socket.send("SURRENDER");
+            break;
+        case 'KeyP':
+            socket.send("SPLIT");
+            break;
+        case 'KeyN':
+            socket.send("START");
+            break;
     }
 }
 
@@ -96,17 +116,23 @@ const increment = 12;
 const hole_card_x = 15;
 const hole_card_y = 400;
 let hold_card_n = 0;
+let dealer_card_n = 0;
+let dealer_hole_card;
 
 /**
  * @param {MessageEvent<string>} [event] - event.
  */
 function onMessage(event) {
+    console.log(`packet ${event.data}`);
     if (event.data.startsWith('PING')) {
         socket.send('PONG');
     } else if (event.data.startsWith('PONG')) {
     } else if (event.data.startsWith('LOSE')) {
-        cards.forEach(spr => app.stage.removeChild(spr));
-        cards = [];
+        statusText.text = 'You lost! :( ' + statusText.text;
+    } else if (event.data.startsWith('WIN')) {
+        statusText.text = 'You won!!!  ' + statusText.text;
+    } else if (event.data.startsWith('DRAW')) {
+        statusText.text = 'You tied! You get the bet back. ' + statusText.text;
     } else if (event.data.startsWith('DECKSIZE ')) {
         const args = event.data.substr(9).split(' ');
 
@@ -118,39 +144,80 @@ function onMessage(event) {
             card.position = {y: 10, x: 20 + i * 2};
             deck.push(card);
         }
-    } else if (event.data.startsWith('HOLECARDS ')) {
-        const args = event.data.substr(10).split(' ');
-        hold_card_n = args.length;
-
-        let x = hole_card_x;
-        const y = hole_card_y;
+    } else if (event.data.startsWith('START')) {
+        hold_card_n = 0;
+        dealer_card_n = 0;
+        cards.forEach(spr => app.stage.removeChild(spr));
+        cards = [];
+    } else if (event.data.startsWith('STATUS ')) {
+        const args = event.data.substr(7).split(' ');
+        const value = Number(args.shift());
+        statusText.text = `Value: ${value}`;
         for (const arg of args) {
-            const c = parseCard(arg);
-
-            const card = app.stage.addChild(CARD.card(c));
-            card.position = {y, x};
-            cards.push(card);
-            x += increment;
+            switch (arg) {
+                case 'soft':
+                    statusText.text += ` or ${value-10}`;
+                    break;
+                case 'H':
+                    statusText.text += " [H]it";
+                    break;
+                case 'S':
+                    statusText.text += " [S]tand";
+                    break;
+                case 'D':
+                    statusText.text += " [D]ouble down";
+                    break;
+                case 'U':
+                    statusText.text += " S[U]rrender";
+                    break;
+                case 'P':
+                    statusText.text += " S[P]lit";
+                    break;
+                case 'N':
+                    statusText.text += " [N]ew game";
+                    break;
+                default:
+                    console.log(`unknown capabiltity ${arg}`);
+                    break;
+            }
         }
-    } else if (event.data.startsWith('DEALERHOLE ')) {
+        
+    } else if (event.data.startsWith('REVEALDOWNS ')) {
+        const args = event.data.substr(12).split(' ');
+        const c = parseCard(args[0]);
+
+        dealer_hole_card.texture = CARD.card(c).texture;
+    } else if (event.data.startsWith('DOWNCARD ')) {
+        const args = event.data.substr(9).split(' ');
+        const c = parseCard(args[0]);
+
+        const card = app.stage.addChild(CARD.card(c));
+        card.position = { y: hole_card_y, x: hole_card_x };
+        cards.push(card);
+        hold_card_n = 1;
+    } else if (event.data.startsWith('DEALERDRAW ')) {
         const args = event.data.substr(11).split(' ');
 
-        let x = 15;
+        let x = 15 + dealer_card_n * increment;
         const y = 200;
 
-        let card = app.stage.addChild(CARD.backCard());
+        if (dealer_card_n == 0 ) {
+            dealer_hole_card = app.stage.addChild(CARD.backCard());
+            dealer_hole_card.position = { y, x };
+            cards.push(dealer_hole_card);
+            x += increment;
+            dealer_card_n += 1;
+        }
+        const c = parseCard(args[0]);
+        const card = app.stage.addChild(CARD.card(c));
         card.position = { y, x };
         cards.push(card);
-        x += increment;
 
-        const c = parseCard(args[0]);
-        card = app.stage.addChild(CARD.card(c));
-        card.position = { y, x };
-        cards.push(card);
-    } else if (event.data.startsWith('DRAWN ')) {
-        const args = event.data.substr(6).split(' ');
+        dealer_card_n += 1;
+    } else if (event.data.startsWith('PLAYERDRAW ')) {
+        const args = event.data.substr(11).split(' ');
 
-        const c = parseCard(args[0]);
+        const c = parseCard(args[1]);
 
         const card = app.stage.addChild(CARD.card(c));
         card.position = { y: hole_card_y, x: hole_card_x + increment * hold_card_n };
@@ -180,7 +247,7 @@ function parseCard(s) {
             c = 39;
             break;
     }
-    switch (s[1]) {
+    switch (s.substr(1)) {
         case 'K':
             c += 12;
             break;
@@ -193,7 +260,7 @@ function parseCard(s) {
         case 'A':
             break;
         default:
-            c += Number(s[1]) - 1;
+            c += Number(s.substr(1)) - 1;
             break;
     }
     return c;

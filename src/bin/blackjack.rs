@@ -115,7 +115,7 @@ fn blackjack(winnings: &mut i128, dealer: Dealer, deck: &mut Deck) -> Option<()>
     println!();
 
     let mut dealer_hand = Hand::new([hole_dealer, open_dealer]);
-    while dealer_hand.value() < 17 || (dealer_hand.value() == 17 && dealer_hand.is_soft() && dealer.hit_soft_17) {
+    while dealer.hits(&dealer_hand) {
         dealer_hand.add_card(deck.draw_one().unwrap());
     }
     print!("Dealer hand:");

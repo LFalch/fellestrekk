@@ -13,6 +13,7 @@ use std::net::SocketAddr;
 mod websocket_server;
 pub mod card;
 pub mod hand;
+pub mod dealer;
 
 #[derive(Serialize)]
 struct TemplateContext {
