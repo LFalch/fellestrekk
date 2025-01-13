@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use crate::card::Card;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -66,5 +68,37 @@ fn value_with_soft(hand: &[Card]) -> (u8, bool) {
         (hand_value + 10, true)
     } else {
         (hand_value, false)
+    }
+}
+
+pub trait BlackjackExt {
+    fn cmp(&self, other: &Self) -> Ordering;
+    fn is_bust(&self) -> bool;
+    fn is_natural(&self) -> bool;
+}
+
+impl BlackjackExt for Hand {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.is_natural() {
+            return if other.is_natural() {
+                Ordering::Equal
+            } else {
+                Ordering::Greater
+            }
+        }
+        if self.is_bust() {
+            return Ordering::Less
+        } else if other.is_bust() {
+            return Ordering::Greater
+        }
+        self.value().cmp(&other.value())
+    }
+    #[inline]
+    fn is_bust(&self) -> bool {
+        self.value() > 21
+    }
+    #[inline]
+    fn is_natural(&self) -> bool {
+        self.cards().len() == 2 && self.value() == 21
     }
 }

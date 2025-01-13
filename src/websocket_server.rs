@@ -17,8 +17,8 @@ use std::time::{Instant, Duration};
 use rand::{Rng, thread_rng};
 use collect_result::CollectResult;
 
-use crate::card::{Card, Deck};
-use crate::hand::Hand;
+use crate::card::{Card, Deck, Rank, Suit};
+use crate::hand::{BlackjackExt, Hand};
 use crate::dealer::Dealer;
 
 type WsReader = Reader<TcpStream>;
@@ -61,6 +61,9 @@ impl Session {
             match handle(&mut player.0, &mut player.1)? {
                 Command::Hit => self.game.hit(i, |cmd: Command| player.1.send_message(&cmd.into_message()).unwrap()),
                 Command::Stand => self.game.stand(i, |cmd: Command| player.1.send_message(&cmd.into_message()).unwrap()),
+                Command::DoubleDown => self.game.double_down(i, |cmd| player.1.send_message(&cmd.into_message()).unwrap()),
+                Command::Surrender => self.game.surrender(i, |cmd| player.1.send_message(&cmd.into_message()).unwrap()),
+                Command::Split => self.game.split(i, |cmd| player.1.send_message(&cmd.into_message()).unwrap()),
                 Command::Start => {
                     if self.game.game_over {
                         self.game.dealer_hand = Hand::new([]);
@@ -139,7 +142,11 @@ impl Game {
             let split = self.player_hand.cards()[0].suit_rank().1 == self.player_hand.cards()[1].suit_rank().1;
 
             send(Command::ValueUpdate(Some(0), self.player_hand.value(), self.player_hand.is_soft()));
-            send(Command::Status { hit: true, stand: true, double: true, surrender: true, split, new_game: false });
+            if self.player_hand.is_natural() {
+                self.stand(0, &mut send);
+            } else {
+                send(Command::Status { hit: true, stand: true, double: true, surrender: true, split, new_game: false });
+            }
         }
 
         if self.dealer_turn && !self.game_over {
@@ -151,22 +158,10 @@ impl Game {
             self.game_over = true;
             send(Command::RevealDowns(self.dealer_hand.cards()[0], vec![self.player_hand.cards()[0]]));
             send(Command::ValueUpdate(None, self.dealer_hand.value(), self.dealer_hand.is_soft()));
-            if self.player_hand.value() > 21 {
-                send(Command::Lose);
-            } else if self.dealer_hand.value() > 21 {
-                send(Command::Win);
-            } else {
-                match self.player_hand.value().cmp(&self.dealer_hand.value()) {
-                    Equal => {
-                        send(Command::Draw);
-                    }
-                    Greater => {
-                        send(Command::Win);
-                    }
-                    Less => {
-                        send(Command::Lose);
-                    }
-                }
+            match self.player_hand.cmp(&self.dealer_hand) {
+                Less => send(Command::Lose),
+                Greater => send(Command::Win),
+                Equal => send(Command::Draw),
             }
         }
 
@@ -195,6 +190,42 @@ impl Game {
     fn stand(&mut self, _pn: usize, mut send: impl FnMut(Command)) {
         send(Command::Status { hit: false, stand: false, double: false, surrender: false, split: false, new_game: true });
         self.dealer_turn = true;
+    }
+    fn double_down(&mut self, pn: usize, mut send: impl FnMut(Command)) {
+        if self.dealer_turn || self.game_over || self.player_hand.cards().len() > 2 {
+            return;
+        }
+        let card = self.draw_card();
+        self.player_hand.add_card(card);
+        send(Command::PlayerDraw(pn, card));
+
+        // TODO: double bet
+
+        let value = self.player_hand.value();
+        send(Command::ValueUpdate(Some(0), value, self.player_hand.is_soft()));
+        send(Command::Status { hit: false, stand: false, double: false, surrender: false, split: false, new_game: true });
+        self.dealer_turn = true;
+    }
+    fn surrender(&mut self, _pn: usize, mut send: impl FnMut(Command)) {
+        if self.dealer_turn || self.game_over || self.player_hand.cards().len() > 2 {
+            return;
+        }
+
+        // TODO: halve bet
+
+        send(Command::Status { hit: false, stand: false, double: false, surrender: false, split: false, new_game: true });
+        self.dealer_turn = true;
+    }
+    fn split(&mut self, _pn: usize, _send: impl FnMut(Command)) {
+        if self.dealer_turn || self.game_over {
+            return;
+        }
+        match self.player_hand.cards() {
+            &[c1, c2] if c1.suit_rank().1 == c2.suit_rank().1 => (),
+            _ => return,
+        }
+
+        eprintln!("unimplemented split cards")
     }
     fn has_space(&self) -> bool {
         false
