@@ -79,19 +79,14 @@ pub trait BlackjackExt {
 
 impl BlackjackExt for Hand {
     fn cmp(&self, other: &Self) -> Ordering {
-        if self.is_natural() {
-            return if other.is_natural() {
-                Ordering::Equal
-            } else {
-                Ordering::Greater
-            }
+        match (self.value, other.value, self.cards.len() == 2, other.cards.len() == 2) {
+            (21, 21, true, true) => Ordering::Equal,
+            (21, _, true, _) => Ordering::Greater,
+            (_, 21, _, true) => Ordering::Less,
+            (a@ 0..=21, b @ 0..=21, _, _) => a.cmp(&b),
+            (22.., _, _, _) => Ordering::Less,
+            (_, 22.., _, _) => Ordering::Greater,
         }
-        if self.is_bust() {
-            return Ordering::Less
-        } else if other.is_bust() {
-            return Ordering::Greater
-        }
-        self.value().cmp(&other.value())
     }
     #[inline]
     fn is_bust(&self) -> bool {

@@ -19,6 +19,8 @@ let socket;
 let statusText;
 let dealerHandText;
 let playerHandText;
+let balanceText;
+let balance = 1000;
 
 function setup() {
     socket = new WebSocket(`ws://${document.location.hostname}:2794`, "fellestrekk");
@@ -71,6 +73,10 @@ function setup() {
     app.stage.addChild(playerHandText);
     app.stage.addChild(dealerHandText);
 
+    balanceText = new PIXI.Text(`Balance: ¤${balance}`, { fontFamily: 'Arial', fontSize: 20, fill: 0xffffff, align: 'left' });
+    balanceText.position = { x: 570, y: 0};
+    app.stage.addChild(balanceText);
+
     statusText = new PIXI.Text('[H]it [S]tand', {fontFamily:'Arial',fontSize:20, fill: 0xffffff, align: 'left'});
     statusText.position = {x: 4, y: 572};
     app.stage.addChild(statusText);
@@ -99,6 +105,7 @@ function onKeyDown(event) {
             socket.send("SPLIT");
             break;
         case 'KeyN':
+            socket.send('BET 100');
             socket.send("START");
             break;
     }
@@ -128,6 +135,11 @@ let hold_card_n = 0;
 let dealer_card_n = 0;
 let dealer_hole_card;
 
+function updateBalance(difference) {
+    balance += difference;
+    balanceText.text = `Balance: $${balance}\nAuto-bet: $100`;
+}
+
 /**
  * @param {MessageEvent<string>} [event] - event.
  */
@@ -135,23 +147,34 @@ function onMessage(event) {
     console.log(`packet ${event.data}`);
     if (event.data.startsWith('PING')) {
         socket.send('PONG');
-    } else if (event.data.startsWith('PONG')) {
+    } else if (event.data.startsWith('HOST_OK')) {
+        socket.send('BET 100');
     } else if (event.data.startsWith('LOSE')) {
         statusText.text = 'You lost! :( ' + statusText.text;
     } else if (event.data.startsWith('WIN')) {
         statusText.text = 'You won!!!  ' + statusText.text;
     } else if (event.data.startsWith('DRAW')) {
         statusText.text = 'You tied! You get the bet back. ' + statusText.text;
+    } else if (event.data.startsWith('TAKEMONEY ')) {
+        const args = event.data.substr(10).split(' ');
+        const money = Number(args[0]);
+        updateBalance(-money);
+    } else if (event.data.startsWith('SENDMONEY ')) {
+        const args = event.data.substr(10).split(' ');
+        const money = Number(args[0]);
+        updateBalance(money);
     } else if (event.data.startsWith('DECKSIZE ')) {
         const args = event.data.substr(9).split(' ');
 
-        const decksize = Number(args[0]) / 10;
-        deck.forEach(spr => app.stage.removeChild(spr));
-        deck = [];
-        for (let i = 0; i < decksize; i++) {
+        const decksize = Number(args[0]) / 5;
+        while (deck.length < decksize) {
             const card = app.stage.addChild(CARD.backCard());
-            card.position = {y: 10, x: 20 + i * 2};
+            card.position = {y: 10, x: 20 + deck.length * 2};
             deck.push(card);
+        }
+        while (deck.length > decksize) {
+            const card = deck.pop();
+            app.stage.removeChild(card);
         }
     } else if (event.data.startsWith('START')) {
         hold_card_n = 0;

@@ -1,4 +1,3 @@
-
 use websocket::{OwnedMessage, CloseData, WebSocketError, WebSocketResult};
 use websocket::sync::Server;
 use websocket::receiver::Reader;
@@ -17,7 +16,7 @@ use std::time::{Instant, Duration};
 use rand::{Rng, thread_rng};
 use collect_result::CollectResult;
 
-use crate::card::{Card, Deck, Rank, Suit};
+use crate::card::{Card, Deck};
 use crate::hand::{BlackjackExt, Hand};
 use crate::dealer::Dealer;
 
@@ -59,6 +58,7 @@ impl Session {
             }
 
             match handle(&mut player.0, &mut player.1)? {
+                Command::Bet(bet) => self.game.bet(i, bet, |cmd: Command| player.1.send_message(&cmd.into_message()).unwrap()),
                 Command::Hit => self.game.hit(i, |cmd: Command| player.1.send_message(&cmd.into_message()).unwrap()),
                 Command::Stand => self.game.stand(i, |cmd: Command| player.1.send_message(&cmd.into_message()).unwrap()),
                 Command::DoubleDown => self.game.double_down(i, |cmd| player.1.send_message(&cmd.into_message()).unwrap()),
@@ -96,7 +96,9 @@ pub struct  Game {
     dirty_deck: bool,
     game_over: bool,
     dealer_turn: bool,
-    dealer: Dealer
+    dealer: Dealer,
+
+    bet: u32,
 }
 // TODO: implement naturals (blackjacks)
 impl Game {
@@ -109,6 +111,7 @@ impl Game {
             game_over: true,
             dealer_turn: false,
             dealer: Dealer::h17(),
+            bet: 0,
         }
     }
     fn draw_card(&mut self) -> Card {
@@ -116,6 +119,11 @@ impl Game {
         self.deck.draw_one().unwrap()
     }
     fn tick(&mut self, mut send: impl FnMut(Command)) {
+        if self.game_over && self.bet == 0 {
+            // wait for bet
+            return;
+        }
+
         if self.dealer_hand.cards().is_empty() {
             send(Command::Start);
             self.game_over = false;
@@ -158,10 +166,23 @@ impl Game {
             self.game_over = true;
             send(Command::RevealDowns(self.dealer_hand.cards()[0], vec![self.player_hand.cards()[0]]));
             send(Command::ValueUpdate(None, self.dealer_hand.value(), self.dealer_hand.is_soft()));
+            let bet = self.bet;
+            self.bet = 0;
             match self.player_hand.cmp(&self.dealer_hand) {
                 Less => send(Command::Lose),
-                Greater => send(Command::Win),
-                Equal => send(Command::Draw),
+                Greater => {
+                    send(Command::Win);
+                    if self.player_hand.is_natural() {
+                        // blackjack bonus
+                        send(Command::SendMoney(bet * 2 + bet / 2));
+                    } else {
+                        send(Command::SendMoney(bet * 2));
+                    }
+                }
+                Equal => {
+                    send(Command::Draw);
+                    send(Command::SendMoney(bet));
+                }
             }
         }
 
@@ -170,8 +191,15 @@ impl Game {
             send(Command::DeckSize(self.deck.size() as u8));
         }
     }
+    fn bet(&mut self, _pn: usize, bet: u32, mut send: impl FnMut(Command)) {
+        if self.bet != 0 {
+            return;
+        }
+        send(Command::TakeMoney(bet));
+        self.bet = bet;
+    }
     fn hit(&mut self, pn: usize, mut send: impl FnMut(Command)) {
-        if self.dealer_turn || self.game_over {
+        if self.dealer_turn || self.game_over || self.bet == 0 {
             return;
         }
         let card = self.draw_card();
@@ -188,18 +216,25 @@ impl Game {
         }
     }
     fn stand(&mut self, _pn: usize, mut send: impl FnMut(Command)) {
+        if self.dealer_turn || self.game_over || self.bet == 0 {
+            dbg!(self.dealer_turn);
+            dbg!(self.game_over);
+            dbg!(self.bet);
+            return;
+        }
         send(Command::Status { hit: false, stand: false, double: false, surrender: false, split: false, new_game: true });
         self.dealer_turn = true;
     }
     fn double_down(&mut self, pn: usize, mut send: impl FnMut(Command)) {
-        if self.dealer_turn || self.game_over || self.player_hand.cards().len() > 2 {
+        if self.dealer_turn || self.game_over || self.bet == 0 || self.player_hand.cards().len() > 2 {
             return;
         }
         let card = self.draw_card();
         self.player_hand.add_card(card);
         send(Command::PlayerDraw(pn, card));
 
-        // TODO: double bet
+        send(Command::TakeMoney(self.bet));
+        self.bet += self.bet;
 
         let value = self.player_hand.value();
         send(Command::ValueUpdate(Some(0), value, self.player_hand.is_soft()));
@@ -207,17 +242,19 @@ impl Game {
         self.dealer_turn = true;
     }
     fn surrender(&mut self, _pn: usize, mut send: impl FnMut(Command)) {
-        if self.dealer_turn || self.game_over || self.player_hand.cards().len() > 2 {
+        if self.dealer_turn || self.game_over || self.bet == 0 || self.player_hand.cards().len() > 2 {
             return;
         }
 
-        // TODO: halve bet
+        let give_back = self.bet / 2;
+        self.bet = 0;
+        send(Command::SendMoney(give_back));
 
         send(Command::Status { hit: false, stand: false, double: false, surrender: false, split: false, new_game: true });
         self.dealer_turn = true;
     }
     fn split(&mut self, _pn: usize, _send: impl FnMut(Command)) {
-        if self.dealer_turn || self.game_over {
+        if self.dealer_turn || self.game_over || self.bet == 0 {
             return;
         }
         match self.player_hand.cards() {
@@ -246,6 +283,11 @@ enum Command {
     Draw,
     PlayerDraw(usize, Card),
     DeckSize(u8),
+
+    Bet(u32),
+    SendMoney(u32),
+    TakeMoney(u32),
+
     // Blackjack
     ValueUpdate(Option<usize>, u8, bool),
     DealerDraw(Card),
@@ -288,6 +330,9 @@ impl FromStr for Command {
             "HOST_OK" => Ok(Command::HostOk(u16::from_str_radix(split.next().ok_or(())?, 16).map_err(|_| ())?)),
             "JOIN_OK" => Ok(Command::JoinOk(u16::from_str_radix(split.next().ok_or(())?, 16).map_err(|_| ())?, split.next().map(|s| s.to_owned()))),
             "START" => Ok(Command::Start),
+            "BET" => Ok(Command::Bet(split.next().and_then(|s| s.parse().ok()).ok_or(())?)),
+            "TAKEMONEY" => Ok(Command::TakeMoney(split.next().and_then(|s| s.parse().ok()).ok_or(())?)),
+            "SENDMONEY" => Ok(Command::SendMoney(split.next().and_then(|s| s.parse().ok()).ok_or(())?)),
             "DRAW" => Ok(Command::Draw),
             "REVEALDOWNS" => Ok(Command::RevealDowns(
                 Card::from_u8(split.next().ok_or(())?.parse().map_err(|_| ())?),
@@ -370,6 +415,9 @@ impl Display for Command {
             Command::JoinOk(c, Some(s2)) => write!(f, "JOIN_OK {c:X} {s2}"),
             Command::JoinOk(c, None) => write!(f, "JOIN_OK {c:X}"),
             Command::Start => write!(f, "START"),
+            Command::Bet(i) => write!(f, "BET {i}"),
+            Command::TakeMoney(i) => write!(f, "TAKEMONEY {i}"),
+            Command::SendMoney(i) => write!(f, "SENDMONEY {i}"),
             Command::Draw => write!(f, "DRAW"),
             Command::PlayerDraw(p, c) => write!(f, "PLAYERDRAW {p} {c}"),
             Command::DeckSize(n) => write!(f, "DECKSIZE {n}"),
