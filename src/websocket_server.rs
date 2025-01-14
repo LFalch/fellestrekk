@@ -217,9 +217,6 @@ impl Game {
     }
     fn stand(&mut self, _pn: usize, mut send: impl FnMut(Command)) {
         if self.dealer_turn || self.game_over || self.bet == 0 {
-            dbg!(self.dealer_turn);
-            dbg!(self.game_over);
-            dbg!(self.bet);
             return;
         }
         send(Command::Status { hit: false, stand: false, double: false, surrender: false, split: false, new_game: true });
