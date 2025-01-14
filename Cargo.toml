@@ -2,14 +2,18 @@
 name = "fellestrekk"
 version = "0.1.0"
 authors = ["LFalch <lucas@wasd.dk>"]
-edition = "2018"
+edition = "2021"
 default-run = "fellestrekk"
 
 [dependencies]
-rocket = "0.4.2"
-rocket_contrib = {version = "0.4.2", features = ["tera_templates"]}
+rocket = {version = "0.5", features = ["json"]}
+rocket_dyn_templates = { version = "0.1", features = ["tera"] }
 serde = "1"
 serde_derive = "1"
+serde_json = "1"
 rand = "0.8"
+rocket-accept-language = "0.8"
+rocket_ws = "0.1"
+bitflags = "2"
 websocket = "0.24"
 collect_result = "0.1.1"

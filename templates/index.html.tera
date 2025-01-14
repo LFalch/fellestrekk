@@ -1,14 +1,40 @@
 {% extends "base" %}
-{% block title %}Index{% endblock title %}
+{% block title %}{{lang.index_title}}{% endblock title %}
+
+{% block head %}
+{% endblock head %}
 {% block content %}
-<h1>Index</h1>
-<p class="important">
-    Welcome to my awesome homepage.
-</p>
-<p>
-    Shit, fuck, {{name}}
-</p>
-<p>
-    <a href="/websockets.html">Websockets</a>
-</p>
+<div class="container mt-3">
+    <h1>{{lang.index_title}}</h1>
+    <p>
+        {{lang.welcome}}
+    </p>
+</div>
+<div class="container">
+    <div class="card mb-3 m-md-5">
+        <div class="card-body">
+            <form action="/game" method="get">
+                <div class="form-row">
+                    <div class="col-12 col-sm-6 col-md-4 mb-3 mb-sm-0">
+                        <div class="input-group">
+                            <a href="/game" class="btn btn-primary btn-block">{{lang.new_game}}</a>
+                        </div>
+                    </div>
+                    <div class="col-12 d-sm-none d-md-block col-md-4 mb-3 mb-sm-0 text-center">
+                        {{lang.or_join}}
+                    </div>
+                    <div class="col-12 col-sm-6 col-md-4">
+                        <div class="input-group">
+                            <input class="form-control" type="text" id="code" autocomplete="off" name="code"
+                                placeholder="{{lang.game_code}}" maxlength="5">
+                            <div class="input-group-append">
+                                <button class="btn btn-primary" type="submit">{{lang.join}}</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
 {% endblock content %}

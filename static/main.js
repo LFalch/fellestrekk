@@ -9,10 +9,41 @@ function randomInt(min, max) {
 
 let app = new PIXI.Application({ width: 800, height: 600 });
 
-//Add the canvas that Pixi automatically created for you to the HTML document
-document.body.appendChild(app.view);
+document.getElementById('game').appendChild(app.view);
+app.stage.interactive = true;
 
-PIXI.Loader.shared.add("cards.png").load(setup);
+PIXI.Loader.shared.add("static/cards.png").load(setup);
+
+let texes = {};
+let strings = {};
+let onReloadStringsCbs = [];
+
+const onReloadStrings = function () {
+    for (const cb of onReloadStringsCbs) {
+        cb();
+    }
+}
+{
+    const httpReq = new XMLHttpRequest();
+    const lang = document.documentElement.lang;
+    httpReq.open("GET", `/strings/${lang}.json`, true);
+    httpReq.onreadystatechange = function () {
+        if (httpReq.readyState == 4 && httpReq.status == 200) {
+            strings = JSON.parse(httpReq.responseText);
+        }
+
+        onReloadStrings();
+    }
+    httpReq.send(null);
+}
+
+function texture(name) {
+    if (!texes[name]) {
+        texes[name] = PIXI.Loader.shared.resources[`static/${name}.png`].texture;
+    }
+
+    return texes[name];
+}
 
 let CARD;
 let socket;
@@ -23,14 +54,35 @@ let balanceText;
 let balance = 1000;
 
 function setup() {
-    socket = new WebSocket(`ws://${document.location.hostname}:2794`, "fellestrekk");
+    let protocol = "ws:";
+    if (window.location.protocol === "https:") {
+        protocol = "wss:";
+    }
+    socket = new WebSocket(`${protocol}//${document.location.hostname}:${document.location.port}/ws`);
     socket.onmessage = onMessage;
     socket.onclose = onClose;
-    socket.onopen = function() {
-        socket.send("HOST");
+    socket.onopen = function () {
+        const get_code = new URLSearchParams(document.location.search).get('code');
+
+        if (get_code == null) {
+            socket.send(`HOST BLACKJACK`)
+        } else {
+            code = get_code;
+            socket.send(`JOIN ${code}`);
+        }
     }
 
-    const cards_tex = PIXI.Loader.shared.resources["cards.png"].texture.baseTexture
+    document.getElementById('formChat').onsubmit = function (event) {
+        target = event.target;
+        const msg = event.target.firstElementChild.value;
+        event.target.firstElementChild.value = '';
+
+        socket.send(`CHAT ${msg}`);
+
+        event.preventDefault();
+    }
+
+    const cards_tex = PIXI.Loader.shared.resources["static/cards.png"].texture.baseTexture
     let suits = [];
     for (let y = 0; y < cards_tex.height; y += 96) {
         let cards = [];
@@ -82,10 +134,51 @@ function setup() {
     app.stage.addChild(statusText);
 }
 
+/**
+ * @param {string} [sender] - Sender name.
+ * @param {string} msg - Message body.
+ * @param {string} [msg_class] - CSS class for message body
+ */
+function msgBox(sender, msg, msg_class) {
+    if (!msg) {
+        msg = sender;
+        sender = null;
+    }
+
+    const sender_txt = sender ? document.createTextNode(`${sender}: `) : null;
+    const msg_txt = document.createTextNode(msg);
+
+    let p = document.createElement("p");
+
+    if (sender_txt) {
+        let b = document.createElement("b");
+        b.appendChild(sender_txt);
+
+        p.appendChild(b);
+    }
+
+    let span = document.createElement("span");
+    span.appendChild(msg_txt);
+    if (msg_class) {
+        span.classList.add(msg_class);
+    }
+
+    p.appendChild(span);
+
+    const bm = document.getElementById('boxMessages');
+
+    const scroll = bm.scrollHeight - bm.scrollTop == bm.clientHeight;
+
+    bm.appendChild(p);
+    if (scroll) {
+        bm.scrollBy(0, p.clientHeight);
+    }
+
+    return p;
+}
+
 let deck = [];
 let cards = [];
-
-window.addEventListener('keydown', (event) => onKeyDown(event), false);
 
 function onKeyDown(event) {
     switch (event.code) {
@@ -110,6 +203,8 @@ function onKeyDown(event) {
             break;
     }
 }
+app.view.setAttribute('tabindex', 1);
+app.view.addEventListener('keydown', (event) => onKeyDown(event), false);
 
 function mkGmLoop(logic) {
     let time = 0;
@@ -144,11 +239,12 @@ function updateBalance(difference) {
  * @param {MessageEvent<string>} [event] - event.
  */
 function onMessage(event) {
-    console.log(`packet ${event.data}`);
+    console.log(`got ${event.data}`);
     if (event.data.startsWith('PING')) {
         socket.send('PONG');
     } else if (event.data.startsWith('HOST_OK')) {
         socket.send('BET 100');
+        socket.send("START");
     } else if (event.data.startsWith('LOSE')) {
         statusText.text = 'You lost! :( ' + statusText.text;
     } else if (event.data.startsWith('WIN')) {
@@ -263,6 +359,13 @@ function onMessage(event) {
         card.position = { y: hole_card_y, x: hole_card_x + increment * hold_card_n };
         hold_card_n += 1;
         cards.push(card);
+    } else if (event.data.startsWith('CHAT_MSG ')) {
+        const body = event.data.substr('CHAT_MSG '.length);
+        const sender = body.split(' ')[0];
+        const sender_name = `${strings.player} ${Number(sender)+1}`;
+        const msg = body.substr(sender.length + 1);
+
+        msgBox(sender_name, msg);
     } else {
         console.log(`unknown packet ${event.data}`);
     }
@@ -304,4 +407,17 @@ function parseCard(s) {
             break;
     }
     return c;
+}
+
+function sniff() {
+    if (socket.actualSend) {
+        socket.send = socket.actualSend;
+        delete socket.actualSend;
+        return
+    }
+    socket.actualSend = socket.send;
+    socket.send = function(packet) {
+        socket.actualSend(packet);
+        console.log(`sent ${packet}`);
+    }
 }

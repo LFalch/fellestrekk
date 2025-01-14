@@ -1,8 +1,8 @@
 {% extends "base" %}
 {% block title %}404{% endblock title %}
 {% block content %}
-<h1>Not found - 404</h1>
+<h1>{{lang.not_found_title}} - 404</h1>
 <p class="error">
-    Page {{path}} not found.
+    {{lang.the_page_was_not_found | replace(from="$PATH", to=path)}}
 </p>
 {% endblock content %}

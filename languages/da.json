@@ -1,0 +1,26 @@
+{
+    "lang_code": "da",
+    "flag_code": "dk",
+    "display_name": "Dansk",
+    "cookie_accept": "For at huske dit valg af sprog benytter denne side cookies. Er det okay med dig?",
+    "index_title": "Fællestræk",
+    "welcome": "Velkommen til denne side til at spille kortspil!",
+    "new_game": "Lav et nyt spil",
+    "or_join": "Eller slut dig til en vens spil",
+    "game_code": "Spilkode",
+    "join": "Tilslut dig",
+    "not_found_title": "Ikke fundet",
+    "the_page_was_not_found": "Siden $PATH kunne ikke findes.",
+    "game_title": "Spil",
+    "write_to_opponent_here": "Skriv en besked til din modstander her...",
+    "game": {
+        "close_error": "Noget gik måske galt. Forbindelse afbrudt:",
+        "code": "Giv din ven denne kode, så kan de kan være med:",
+        "host_success": "Tilsluttet.",
+        "join_fail": "Serveren gav et galt svar. Jeg ventede sessionskoden $CODE, men fik ",
+        "join_success": "Forbundet til sessionen.",
+        "your_turn": "Det er din tur igen.",
+        "opponents_turn": "Det er din modstanders tur.",
+        "unknown": "Ukendt"
+    }
+}

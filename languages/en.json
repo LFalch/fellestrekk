@@ -1,0 +1,26 @@
+{
+    "lang_code": "en",
+    "flag_code": "gb",
+    "display_name": "English",
+    "cookie_accept": "To remember your choice of language, this webpage uses a cookie. Is this okay with you?",
+    "index_title": "Fellestrekk",
+    "welcome": "Welcome to this page for playing card games!",
+    "new_game": "Make new game",
+    "or_join": "Or join a friend's game",
+    "game_code": "Game-code",
+    "join": "Join",
+    "not_found_title": "Not found",
+    "the_page_was_not_found": "The page $PATH could not be found.",
+    "game_title": "Game",
+    "write_to_opponent_here": "Write a message to your opponent here...",
+    "game": {
+        "close_error": "Something might've gone wrong. Disconnected:",
+        "code": "Give your friend this code so they can join:",
+        "host_success": "Connected.",
+        "join_fail": "Server gave incorrected answer, excepted game code $CODE, but got ",
+        "join_success": "Connected to session.",
+        "your_turn": "It is your turn again.",
+        "opponents_turn": "It's your opponent's turn.",
+        "unknown": "Unknown"
+    }
+}
