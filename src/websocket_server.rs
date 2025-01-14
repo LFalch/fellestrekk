@@ -100,7 +100,9 @@ pub struct  Game {
 
     bet: u32,
 }
-// TODO: implement naturals (blackjacks)
+// TODO: move blackjack game into its own module
+// TODO: implement multiple hands (and multiple players)
+// TODO: make splits work
 impl Game {
     fn new() -> Game {
         Game {
