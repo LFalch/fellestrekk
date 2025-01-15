@@ -31,14 +31,14 @@ impl Game for Blackjack {
 
         if self.turn.is_none() && !self.game_over {
             self.set_due_for_tick();
+            cmds.send(Command::RevealDowns(self.dealer_hand.cards()[0], vec![self.player_hand.cards()[0]]));
             while self.dealer.hits(&self.dealer_hand) {
                 let card = self.draw_card();
                 self.dealer_hand.add_card(card);
                 cmds.send(Command::DealerDraw(card));
             }
-            self.game_over = true;
-            cmds.send(Command::RevealDowns(self.dealer_hand.cards()[0], vec![self.player_hand.cards()[0]]));
             cmds.send(Command::ValueUpdate(None, self.dealer_hand.value(), self.dealer_hand.is_soft()));
+            self.game_over = true;
             let bet = self.bet;
             self.bet = 0;
             match self.player_hand.cmp(&self.dealer_hand) {
@@ -82,6 +82,7 @@ impl Game for Blackjack {
                     if self.deck.size() < 20 {
                         self.deck = Deck::new_standard();
                         self.deck.shuffle();
+                        cmds.send(Command::DeckSize(self.deck.size() as u8));
                     }
                     let down_player = self.draw_card();
                     let down_dealer = self.draw_card();
@@ -113,7 +114,6 @@ impl Game for Blackjack {
     }
 }
 
-// TODO: move blackjack game into its own module
 // TODO: implement multiple hands (and multiple players)
 // TODO: make splits work
 impl Blackjack {

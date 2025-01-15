@@ -10,7 +10,6 @@ function randomInt(min, max) {
 let app = new PIXI.Application({ width: 800, height: 600 });
 
 document.getElementById('game').appendChild(app.view);
-app.stage.interactive = true;
 
 PIXI.Loader.shared.add("static/cards.png").load(setup);
 
@@ -55,6 +54,9 @@ let balanceText;
 let balance = 1000;
 
 function setup() {
+    app.stage.interactive = true;
+    app.stage.sortableChildren = true;
+
     let protocol = "ws:";
     if (window.location.protocol === "https:") {
         protocol = "wss:";
@@ -179,7 +181,9 @@ function msgBox(sender, msg, msg_class) {
 }
 
 let deck = [];
-let cards = [];
+let dealerhand = []
+let playerhand = [];
+let forceFinishNextAnimation = false;
 
 function onKeyDown(event) {
     switch (event.code) {
@@ -202,7 +206,11 @@ function onKeyDown(event) {
             socket.send('BET 100');
             socket.send("START");
             break;
+        default:
+            forceFinishNextAnimation = true;
+            break;
     }
+    if (animationQueue.length > 1) forceFinishNextAnimation = true;
 }
 app.view.setAttribute('tabindex', 1);
 app.view.addEventListener('keydown', (event) => onKeyDown(event), false);
@@ -220,34 +228,61 @@ function mkGmLoop(logic) {
     }
 }
 
+function dummyAnimation(fireOnce) {
+    return {progress: (delta) => {
+        fireOnce(delta);
+        return true;
+    }}
+}
 function CardAnimation(sprite, end_x, end_y, total_time, maybe_flip = null) {
-    const dx = (end_x - sprite.x) / total_time;
-    const dy = (end_y - sprite.y) / total_time;
+    const dist_x = end_x - sprite.x;
+    const dist_y = end_y - sprite.y;
+    if (typeof total_time === 'object') {
+        if (total_time.speed) {
+            total_time = Math.hypot(dist_x, dist_y) / total_time.speed;
+        }
+    }
+
+    const dx = dist_x / total_time;
+    const dy = dist_y / total_time;
     const ow = sprite.width;
     const dw = ow / (total_time / 2);
 
-    this.time = 0;
-    this.sprite = sprite;
-    this.progress = (delta) => {
-        this.time += delta;
-        if (this.time > total_time) {
-            this.sprite.x = end_x;
-            this.sprite.y = end_y;
+    let time = 0;
+    let spread_out = false;
+    this.progress = (delta, force_finish = false) => {
+        if (!app.stage.children.includes(sprite)) return true;
 
-            return true;
+        time += delta;
+        const animationIsDone = time > total_time;
+        if (animationIsDone || force_finish) {
+            sprite.x = end_x;
+            sprite.y = end_y;
+            sprite.width = ow;
+            if (maybe_flip !== null)
+                sprite.texture = maybe_flip;
+
+            return animationIsDone;
         }
 
         if (maybe_flip !== null) {
-            if (this.time > total_time / 2) {
-                this.sprite.width = ow;
-                this.sprite.texture = maybe_flip;
+            if (time > total_time / 2) {
+                sprite.texture = maybe_flip;
                 maybe_flip = null;
-            } else
-                this.sprite.width -= dw * delta;
+                spread_out = true;
+            } else {
+                const ddw = dw * delta;
+                sprite.width -= ddw;
+                sprite.x += ddw/2;
+            }
+        } else if (spread_out) {
+            const ddw = dw * delta;
+            sprite.width += ddw;
+            sprite.x -= ddw/2;
         }
 
-        this.sprite.x += dx * delta;
-        this.sprite.y += dy * delta;
+        sprite.x += dx * delta;
+        sprite.y += dy * delta;
 
         return false;
     };
@@ -256,21 +291,29 @@ function CardAnimation(sprite, end_x, end_y, total_time, maybe_flip = null) {
 function queueAnimation(animation) {
     animationQueue.push(animation);
 }
+function drawCard(targetX, targetY, c = null) {
+    const card = app.stage.addChild(CARD.backCard());
+    card.position = { x: DECK_X + (deck.length-1) * 2, y: DECK_Y};
+    let flipSide = null;
+    if (c) flipSide = CARD.card(c).texture;
+    queueAnimation(new CardAnimation(card, targetX, targetY, {speed:800}, flipSide));
+    return card;
+}
+
 function consistentLogic() {
+    const force = forceFinishNextAnimation;
+    let forced = false;
+    forceFinishNextAnimation = false;
     const delta = 1 / 60;
-    if (animationQueue.length > 0) {
-        if (animationQueue[0].progress(delta)) {
-            animationQueue.shift();
-        }
+    while (animationQueue.length > 0 && (animationQueue[0].progress(delta, force) || (force && (forced = true)))) {
+        animationQueue.shift();
+        if (forced) break;
     }
 }
 
 const increment = 12;
 const hole_card_x = 15;
 const hole_card_y = 400;
-let hold_card_n = 0;
-let dealer_card_n = 0;
-let dealer_hole_card;
 
 function updateBalance(difference) {
     balance += difference;
@@ -280,9 +323,6 @@ function updateBalance(difference) {
 const DECK_X = 20;
 const DECK_Y = 10;
 
-/**
- * @param {MessageEvent<string>} [event] - event.
- */
 function onMessage(event) {
     console.log(`got ${event.data}`);
     if (event.data.startsWith('PING')) {
@@ -318,10 +358,10 @@ function onMessage(event) {
             app.stage.removeChild(card);
         }
     } else if (event.data.startsWith('START')) {
-        hold_card_n = 0;
-        dealer_card_n = 0;
-        cards.forEach(spr => app.stage.removeChild(spr));
-        cards = [];
+        dealerhand.forEach(spr => app.stage.removeChild(spr));
+        dealerhand = [];
+        playerhand.forEach(spr => app.stage.removeChild(spr));
+        playerhand = [];
     } else if (event.data.startsWith('VALUEUPDATE ')) {
         const args = event.data.substr(12).split(' ');
         const soft = args[args.length-1] == 'soft';
@@ -366,48 +406,43 @@ function onMessage(event) {
     } else if (event.data.startsWith('REVEALDOWNS ')) {
         const args = event.data.substr(12).split(' ');
         const c = parseCard(args[0]);
-        const {x, y} = dealer_hole_card.position;
+        const card = dealerhand[0];
 
-        queueAnimation(new CardAnimation(dealer_hole_card, x, y, 0.5, CARD.card(c).texture));
+        queueAnimation(dummyAnimation(() => card.zIndex += 1));
+        queueAnimation(new CardAnimation(card, 15, 130, 0.4, CARD.card(c).texture));
+        queueAnimation(dummyAnimation(() => {
+            card.zIndex -= 2;
+            queueAnimation(new CardAnimation(card, 15, 200, 0.35));
+        }));
     } else if (event.data.startsWith('DOWNCARD ')) {
         const args = event.data.substr(9).split(' ');
         const c = parseCard(args[0]);
 
-        const card = app.stage.addChild(CARD.card(c));
-        card.position = { y: hole_card_y, x: hole_card_x };
-        cards.push(card);
-        hold_card_n = 1;
+        const card = drawCard(hole_card_x, hole_card_y, c);
+        playerhand.push(card);
+
+        if (dealerhand.length == 0) {
+            const card = drawCard(15, 200);
+            dealerhand.push(card);
+        }
     } else if (event.data.startsWith('DEALERDRAW ')) {
         const args = event.data.substr(11).split(' ');
 
-        let x = 15 + dealer_card_n * increment;
         const y = 200;
 
-        if (dealer_card_n == 0 ) {
-            dealer_hole_card = app.stage.addChild(CARD.backCard());
-            dealer_hole_card.position = { x: DECK_X, y: DECK_Y };
-            queueAnimation(new CardAnimation(dealer_hole_card, x, y, 0.2));
-            cards.push(dealer_hole_card);
-            x += increment;
-            dealer_card_n += 1;
+        if (dealerhand.length == 0 ) {
+            const card = drawCard(15 + dealerhand.length * increment, y);
+            dealerhand.push(card);
         }
         const c = parseCard(args[0]);
-        const card = app.stage.addChild(CARD.card(c));
-        card.position = { x: DECK_X, y: DECK_Y };
-        queueAnimation(new CardAnimation(card, x, y, 0.2));
-        cards.push(card);
-
-        dealer_card_n += 1;
+        queueAnimation(dummyAnimation(() => dealerhand.push(drawCard(15 + dealerhand.length * increment, y, c))));
     } else if (event.data.startsWith('PLAYERDRAW ')) {
         const args = event.data.substr(11).split(' ');
 
         const c = parseCard(args[1]);
 
-        const card = app.stage.addChild(CARD.card(c));
-        card.position = { x: DECK_X, y: DECK_Y };
-        queueAnimation(new CardAnimation(card, hole_card_x + increment * hold_card_n, hole_card_y, 0.2));
-        hold_card_n += 1;
-        cards.push(card);
+        const card = drawCard(hole_card_x + increment * playerhand.length, hole_card_y, c);
+        playerhand.push(card);
     } else if (event.data.startsWith('CHAT_MSG ')) {
         const body = event.data.substr('CHAT_MSG '.length);
         const sender = body.split(' ')[0];
