@@ -17,6 +17,7 @@ PIXI.Loader.shared.add("static/cards.png").load(setup);
 let texes = {};
 let strings = {};
 let onReloadStringsCbs = [];
+let animationQueue = [];
 
 const onReloadStrings = function () {
     for (const cb of onReloadStringsCbs) {
@@ -219,8 +220,49 @@ function mkGmLoop(logic) {
     }
 }
 
-function consistentLogic() {
+function CardAnimation(sprite, end_x, end_y, total_time, maybe_flip = null) {
+    const dx = (end_x - sprite.x) / total_time;
+    const dy = (end_y - sprite.y) / total_time;
+    const ow = sprite.width;
+    const dw = ow / (total_time / 2);
 
+    this.time = 0;
+    this.sprite = sprite;
+    this.progress = (delta) => {
+        this.time += delta;
+        if (this.time > total_time) {
+            this.sprite.x = end_x;
+            this.sprite.y = end_y;
+
+            return true;
+        }
+
+        if (maybe_flip !== null) {
+            if (this.time > total_time / 2) {
+                this.sprite.width = ow;
+                this.sprite.texture = maybe_flip;
+                maybe_flip = null;
+            } else
+                this.sprite.width -= dw * delta;
+        }
+
+        this.sprite.x += dx * delta;
+        this.sprite.y += dy * delta;
+
+        return false;
+    };
+    return this;
+}
+function queueAnimation(animation) {
+    animationQueue.push(animation);
+}
+function consistentLogic() {
+    const delta = 1 / 60;
+    if (animationQueue.length > 0) {
+        if (animationQueue[0].progress(delta)) {
+            animationQueue.shift();
+        }
+    }
 }
 
 const increment = 12;
@@ -234,6 +276,9 @@ function updateBalance(difference) {
     balance += difference;
     balanceText.text = `Balance: $${balance}\nAuto-bet: $100`;
 }
+
+const DECK_X = 20;
+const DECK_Y = 10;
 
 /**
  * @param {MessageEvent<string>} [event] - event.
@@ -265,7 +310,7 @@ function onMessage(event) {
         const decksize = Number(args[0]) / 5;
         while (deck.length < decksize) {
             const card = app.stage.addChild(CARD.backCard());
-            card.position = {y: 10, x: 20 + deck.length * 2};
+            card.position = {y: DECK_Y, x: DECK_X + deck.length * 2};
             deck.push(card);
         }
         while (deck.length > decksize) {
@@ -321,8 +366,9 @@ function onMessage(event) {
     } else if (event.data.startsWith('REVEALDOWNS ')) {
         const args = event.data.substr(12).split(' ');
         const c = parseCard(args[0]);
+        const {x, y} = dealer_hole_card.position;
 
-        dealer_hole_card.texture = CARD.card(c).texture;
+        queueAnimation(new CardAnimation(dealer_hole_card, x, y, 0.5, CARD.card(c).texture));
     } else if (event.data.startsWith('DOWNCARD ')) {
         const args = event.data.substr(9).split(' ');
         const c = parseCard(args[0]);
@@ -339,14 +385,16 @@ function onMessage(event) {
 
         if (dealer_card_n == 0 ) {
             dealer_hole_card = app.stage.addChild(CARD.backCard());
-            dealer_hole_card.position = { y, x };
+            dealer_hole_card.position = { x: DECK_X, y: DECK_Y };
+            queueAnimation(new CardAnimation(dealer_hole_card, x, y, 0.2));
             cards.push(dealer_hole_card);
             x += increment;
             dealer_card_n += 1;
         }
         const c = parseCard(args[0]);
         const card = app.stage.addChild(CARD.card(c));
-        card.position = { y, x };
+        card.position = { x: DECK_X, y: DECK_Y };
+        queueAnimation(new CardAnimation(card, x, y, 0.2));
         cards.push(card);
 
         dealer_card_n += 1;
@@ -356,7 +404,8 @@ function onMessage(event) {
         const c = parseCard(args[1]);
 
         const card = app.stage.addChild(CARD.card(c));
-        card.position = { y: hole_card_y, x: hole_card_x + increment * hold_card_n };
+        card.position = { x: DECK_X, y: DECK_Y };
+        queueAnimation(new CardAnimation(card, hole_card_x + increment * hold_card_n, hole_card_y, 0.2));
         hold_card_n += 1;
         cards.push(card);
     } else if (event.data.startsWith('CHAT_MSG ')) {
