@@ -143,7 +143,19 @@ pub enum Command {
 impl Command {
     fn into_message(self) -> Message {
         Message::Text(self.to_string())
-    } 
+    }
+    pub fn status_new(split: bool) -> Self {
+        Self::Status { hit: true, stand: true, double: true, surrender: true, split, new_game: false }
+    }
+    pub fn status_wait() -> Self {
+        Self::Status { hit: false, stand: false, double: false, surrender: false, split: false, new_game: false }
+    }
+    pub fn status_new_game() -> Self {
+        Self::Status { hit: false, stand: false, double: false, surrender: false, split: false, new_game: true }
+    }
+    pub fn status_mid_hand() -> Self {
+        Self::Status { hit: true, stand: true, double: false, surrender: false, split: false, new_game: false }
+    }
 }
 
 impl FromStr for Command {

@@ -1,6 +1,6 @@
 use std::{cmp::Ordering::{Equal, Greater, Less}, collections::BTreeMap};
 
-use crate::{card::{Card, Deck}, dealer::Dealer, fellestrekk::{Command, CommandQueue, PlayerId}, hand::{BlackjackExt, Hand}};
+use crate::{card::{Card, Deck, Rank, Suit}, dealer::Dealer, fellestrekk::{Command, CommandQueue, PlayerId}, hand::{BlackjackExt, Hand}};
 use super::Game;
 
 type Money = u32;
@@ -64,8 +64,13 @@ impl Game for Blackjack {
                     Command::Bet(bet) => if bet != 0 {
                         bets.insert(pid, bet);
                         cmds.reply(Command::TakeMoney(bet));
+                        if pid == PlayerId::HOST {
+                            cmds.reply(Command::status_new_game());
+                        } else {
+                            cmds.reply(Command::status_wait());
+                        }
                     }
-                    Command::Start if pid == PlayerId::HOST => {
+                    Command::Start if pid == PlayerId::HOST && !bets.is_empty() => {
                         let bets = std::mem::replace(bets, BTreeMap::new());
                         cmds.broadcast(Command::Start);
                         if self.deck.size() < 20 {
@@ -81,50 +86,72 @@ impl Game for Blackjack {
                             let card = self.draw_card();
                             cmds.send_to(pid, Command::DownCard(card));
                             hand.add_card(card);
+                            cmds.send_to(pid, Command::ValueUpdate(Some(pid), hand.value(), hand.is_soft()));
                         }
                         dealer_hand.add_card(self.draw_card());
                         for (hand, &pid) in hands.iter_mut().zip(bets.keys()) {
                             let card = self.draw_card();
                             cmds.broadcast(Command::PlayerDraw(pid, card));
+                            let open_hand = Hand::new([card]);
+                            cmds.broadcast(Command::ValueUpdate(Some(pid), open_hand.value(), open_hand.is_soft()));
                             hand.add_card(card);
+                            cmds.send_to(pid, Command::ValueUpdate(Some(pid), hand.value(), hand.is_soft()));
                         }
                         {
                             let card = self.draw_card();
                             dealer_hand.add_card(card);
                             cmds.broadcast(Command::DealerDraw(card));
+                            let open_hand = Hand::new([card]);
+                            cmds.broadcast(Command::ValueUpdate(None, open_hand.value(), open_hand.is_soft()));
                         }
 
-                        // TODO: send updated values correctly. let the client handle it itself?
-
                         if dealer_hand.is_natural() {
+                            cmds.broadcast(Command::RevealDown(None, dealer_hand.cards()[0]));
+                            cmds.broadcast(Command::ValueUpdate(None, dealer_hand.value(), dealer_hand.is_soft()));
                             for (hand, (&pid, &bet)) in hands.iter_mut().zip(bets.iter()) {
+                                cmds.broadcast(Command::RevealDown(Some(pid), hand.cards()[0]));
+                                cmds.broadcast(Command::ValueUpdate(Some(pid), hand.value(), hand.is_soft()));
                                 if hand.is_natural() {
                                     // send bets back to everyone who also got blackjack, otherwise do nothing
-                                    cmds.send_to(pid, Command::SendMoney(bet))
+                                    cmds.send_to(pid, Command::SendMoney(bet));
+                                    cmds.send_to(pid, Command::Draw);
+                                } else {
+                                    cmds.send_to(pid, Command::Lose);
                                 }
                             }
                             self.state = State::NEW;
                         } else {
-                            self.state = State::PlayingInProgress {
-                                hands_to_play: hands.into_iter().zip(bets.iter()).filter_map(|(hand, (&pid, &bet))| {
-                                    if hand.is_natural() {
-                                        // send back blackjack win bonus
-                                        cmds.send_to(pid, Command::SendMoney(2 * bet + bet / 2));
-                                        None
-                                    } else {
-                                        Some(PlayHand {
-                                            player: pid,
-                                            hand,
-                                        })
-                                    }
-                                }).rev().collect(),
-                                bets,
-                                dealer_hand,
-                                finished_hands: Vec::new(),
-                            };
+                            let hands_to_play: Vec<_> = hands.into_iter().zip(bets.iter()).filter_map(|(hand, (&pid, &bet))| {
+                                if hand.is_natural() {
+                                    cmds.broadcast(Command::RevealDown(Some(pid), hand.cards()[0]));
+                                    cmds.broadcast(Command::ValueUpdate(Some(pid), hand.value(), hand.is_soft()));
+                                    // send back blackjack win bonus
+                                    cmds.send_to(pid, Command::SendMoney(2 * bet + bet / 2));
+                                    cmds.send_to(pid, Command::Win);
+                                    None
+                                } else {
+                                    Some(PlayHand {
+                                        player: pid,
+                                        hand,
+                                    })
+                                }
+                            }).rev().collect();
+                            if hands_to_play.is_empty() {
+                                cmds.broadcast(Command::RevealDown(None, dealer_hand.cards()[0]));
+                                cmds.broadcast(Command::ValueUpdate(None, dealer_hand.value(), dealer_hand.is_soft()));
+                                self.state = State::NEW;
+                            } else {
+                                self.state = State::PlayingInProgress {
+                                    hands_to_play,
+                                    bets,
+                                    dealer_hand,
+                                    finished_hands: Vec::new(),
+                                };
+                                self.notify_new_hand(cmds);
+                            }
                         }
                     }
-                    _ => (),
+                    _ => return,
                 }
             }
             State::PlayingInProgress {
@@ -176,7 +203,6 @@ impl Game for Blackjack {
                             current_hand.hand.add_card(card);
                             cmds.broadcast(Command::PlayerDraw(pid, card));
 
-                            
                             let value = current_hand.hand.value();
                             cmds.broadcast(Command::ValueUpdate(Some(pid), value, current_hand.hand.is_soft()));
                             lost = value > 21;
@@ -184,14 +210,18 @@ impl Game for Blackjack {
                     }
                     Command::Split => {
                         // do split
+                        return;
                     }
-                    _ => (),
+                    _ => return,
                 }
 
                 if hand_is_over {
+                    cmds.reply(Command::status_wait());
                     let ended_hand = hands_to_play.pop().unwrap();
-                    if !lost {
-                        // if the hand lost, we just throw it out. who cares?
+                    if lost {
+                        cmds.reply(Command::Lose);
+                    } else {
+                        // if the hand lost, we just throw it out.
                         finished_hands.push(PlayedHand {
                             player: ended_hand.player,
                             value: ended_hand.hand.value(),
@@ -202,7 +232,11 @@ impl Game for Blackjack {
                     // if there are now no more hands, we finish the game
                     if hands_to_play.is_empty() {
                         self.end_game(cmds);
+                    } else {
+                        self.notify_new_hand(cmds);
                     }
+                } else {
+                    cmds.reply(Command::status_mid_hand());
                 }
             }
         }
@@ -230,13 +264,21 @@ impl Blackjack {
     fn draw_card(&mut self) -> Card {
         draw_card(&mut self.deck, &mut self.dirty_deck)
     }
+    fn notify_new_hand(&mut self, mut cmds: CommandQueue) {
+        let State::PlayingInProgress { hands_to_play, .. } = &self.state else {
+            unreachable!();
+        };
+        let first_hand_to_play = &hands_to_play[0];
+        let cards = first_hand_to_play.hand.cards();
+        let split = cards[0].suit_rank().1 == cards[1].suit_rank().1;
+        cmds.send_to(first_hand_to_play.player, Command::status_new(split));
+    }
     fn end_game(&mut self, mut cmds: CommandQueue) {
         let state = std::mem::replace(&mut self.state, State::AwaitingBets { bets: BTreeMap::new() });
         let State::PlayingInProgress { bets, mut dealer_hand, hands_to_play, finished_hands } = state else {
             unreachable!();
         };
         debug_assert!(hands_to_play.is_empty());
-        // TODO: reveal down cards of player hands as they are played
         cmds.broadcast(Command::RevealDown(None, dealer_hand.cards()[0]));
         cmds.broadcast(Command::ValueUpdate(None, dealer_hand.value(), dealer_hand.is_soft()));
         while self.dealer.hits(&dealer_hand) {
@@ -257,9 +299,15 @@ impl Blackjack {
                 bets[&player]
             };
             match outcome {
-                Less => (),
-                Equal => cmds.send_to(player, Command::SendMoney(bet)),
-                Greater => cmds.send_to(player, Command::SendMoney(2 * bet)),
+                Less => cmds.send_to(player, Command::Lose),
+                Equal => {
+                    cmds.send_to(player, Command::SendMoney(bet));
+                    cmds.send_to(player, Command::Draw);
+                }
+                Greater => {
+                    cmds.send_to(player, Command::SendMoney(2 * bet));
+                    cmds.send_to(player, Command::Win);
+                }
             }
         }
     }

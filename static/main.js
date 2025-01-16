@@ -1,4 +1,3 @@
-// TODO: update to new API
 // TODO: support multiplayer
 
 function randomInt(min, max) {
@@ -10,16 +9,15 @@ function randomInt(min, max) {
     return Math.floor(Math.random() * (max - min) + min);
 }
 
-let app = new PIXI.Application({ width: 800, height: 600 });
-
+const app = new PIXI.Application({ width: 800, height: 600 });
 document.getElementById('game').appendChild(app.view);
 
 PIXI.Loader.shared.add("static/cards.png").load(setup);
 
-let texes = {};
+const texes = {};
 let strings = {};
-let onReloadStringsCbs = [];
-let animationQueue = [];
+const onReloadStringsCbs = [];
+const animationQueue = [];
 
 const onReloadStrings = function () {
     for (const cb of onReloadStringsCbs) {
@@ -79,11 +77,15 @@ function setup() {
     }
 
     document.getElementById('formChat').onsubmit = function (event) {
-        target = event.target;
-        const msg = event.target.firstElementChild.value;
-        event.target.firstElementChild.value = '';
+        const fec = event.target.firstElementChild;
+        const msg = fec.value;
+        fec.value = '';
 
-        socket.send(`CHAT ${msg}`);
+        if (msg.startsWith('//')) {
+            socket.send(msg.substr(2));
+        } else if (msg.length > 0) {
+            socket.send(`CHAT ${msg}`);
+        }
 
         event.preventDefault();
     }
@@ -237,9 +239,9 @@ function dummyAnimation(fireOnce) {
         return true;
     }}
 }
-function CardAnimation(sprite, end_x, end_y, total_time, maybe_flip = null) {
-    const dist_x = end_x - sprite.x;
-    const dist_y = end_y - sprite.y;
+function CardAnimation(sprite, end_x, end_y, total_time, maybe_flip = null, start_x = sprite.x, start_y = sprite.y) {
+    const dist_x = end_x - start_x;
+    const dist_y = end_y - start_y;
     if (typeof total_time === 'object') {
         if (total_time.speed) {
             total_time = Math.hypot(dist_x, dist_y) / total_time.speed;
@@ -298,8 +300,9 @@ function drawCard(targetX, targetY, c = null) {
     const card = app.stage.addChild(CARD.backCard());
     card.position = { x: DECK_X + (deck.length-1) * 2, y: DECK_Y};
     let flipSide = null;
-    if (c) flipSide = CARD.card(c).texture;
-    queueAnimation(new CardAnimation(card, targetX, targetY, {speed:800}, flipSide));
+    if (c !== null) flipSide = CARD.card(c).texture;
+    else card.unrevealed = true;
+    queueAnimation(new CardAnimation(card, targetX, targetY, 0.34, flipSide));
     return card;
 }
 
@@ -350,7 +353,7 @@ function onMessage(event) {
     } else if (event.data.startsWith('DECKSIZE ')) {
         const args = event.data.substr(9).split(' ');
 
-        const decksize = Number(args[0]) / 5;
+        const decksize = Number(args[0]) / 3;
         while (deck.length < decksize) {
             const card = app.stage.addChild(CARD.backCard());
             card.position = {y: DECK_Y, x: DECK_X + deck.length * 2};
@@ -361,10 +364,13 @@ function onMessage(event) {
             app.stage.removeChild(card);
         }
     } else if (event.data.startsWith('START')) {
+        animationQueue.length = 0;
         dealerhand.forEach(spr => app.stage.removeChild(spr));
-        dealerhand = [];
+        dealerhand.length = 0;
         playerhand.forEach(spr => app.stage.removeChild(spr));
-        playerhand = [];
+        playerhand.length = 0;
+        playerHandText.text = '';
+        dealerHandText.text = '';
     } else if (event.data.startsWith('VALUEUPDATE ')) {
         const args = event.data.substr(12).split(' ');
         const soft = args[args.length-1] == 'soft';
@@ -375,9 +381,11 @@ function onMessage(event) {
         } else {
             text = dealerHandText;
         }
-        text.text = `Value: ${value}`;
-        if (soft) text.text += ` or ${value - 10}`;
-    } else if (event.data.startsWith('STATUS ')) {
+        queueAnimation(dummyAnimation(() => {
+            text.text = `Value: ${value}`;
+            if (soft) text.text += ` or ${value - 10}`;
+        }));
+    } else if (event.data.startsWith('STATUS')) {
         const args = event.data.substr(7).split(' ');
         statusText.text = ' ';
         for (const arg of args) {
@@ -400,47 +408,49 @@ function onMessage(event) {
                 case 'N':
                     statusText.text += " [N]ew game";
                     break;
+                case '':
+                    break;
                 default:
                     console.log(`unknown capabiltity ${arg}`);
                     break;
             }
         }
-        
-    } else if (event.data.startsWith('REVEALDOWNS ')) {
-        const args = event.data.substr(12).split(' ');
-        const c = parseCard(args[0]);
-        const card = dealerhand[0];
+    } else if (event.data.startsWith('REVEALDOWN ')) {
+        const args = event.data.substr(11).split(' ');
+        const c = parseCard(args.pop());
+        const whichHand = args.pop();
+        const card = whichHand !== undefined ? (playerhand[0]) /*[whichHand]*/ : (dealerhand[0]);
 
-        queueAnimation(dummyAnimation(() => card.zIndex += 1));
-        queueAnimation(new CardAnimation(card, 15, 130, 0.4, CARD.card(c).texture));
-        queueAnimation(dummyAnimation(() => {
-            card.zIndex -= 2;
-            queueAnimation(new CardAnimation(card, 15, 200, 0.35));
-        }));
+        if (card.unrevealed) {
+            const x = 15;
+            const y1 = whichHand ? hole_card_y : 200;
+            const y2 = y1-70;
+
+            queueAnimation(dummyAnimation(() => card.zIndex += 1));
+            queueAnimation(new CardAnimation(card, x, y2, 0.4, CARD.card(c).texture, x, y1));
+            queueAnimation(dummyAnimation(() => card.zIndex -= 2));
+            queueAnimation(new CardAnimation(card, x, y1, 0.35, null, x, y2));
+        }
     } else if (event.data.startsWith('DOWNCARD ')) {
         const args = event.data.substr(9).split(' ');
         const c = parseCard(args[0]);
 
         const card = drawCard(hole_card_x, hole_card_y, c);
         playerhand.push(card);
-
-        if (dealerhand.length == 0) {
-            const card = drawCard(15, 200);
-            dealerhand.push(card);
-        }
     } else if (event.data.startsWith('DEALERDRAW ')) {
         const args = event.data.substr(11).split(' ');
 
         const y = 200;
 
-        if (dealerhand.length == 0 ) {
-            const card = drawCard(15 + dealerhand.length * increment, y);
-            dealerhand.push(card);
-        }
         const c = parseCard(args[0]);
-        queueAnimation(dummyAnimation(() => dealerhand.push(drawCard(15 + dealerhand.length * increment, y, c))));
+        dealerhand.push(drawCard(15 + dealerhand.length * increment, y, c));
     } else if (event.data.startsWith('PLAYERDRAW ')) {
         const args = event.data.substr(11).split(' ');
+
+        if (dealerhand.length == 0) {
+            const card = drawCard(15, 200);
+            dealerhand.push(card);
+        }
 
         const c = parseCard(args[1]);
 

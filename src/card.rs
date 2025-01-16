@@ -128,6 +128,9 @@ impl Deck {
     pub fn put_in_back(&mut self, card: Card) {
         self.cards.insert(0, card);
     }
+    pub fn insert(&mut self, cards_from_the_top: usize, card: Card) {
+        self.cards.insert(self.cards.len() - cards_from_the_top, card);
+    }
     pub fn size(&self) -> usize {
         self.cards.len()
     }
