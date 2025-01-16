@@ -1,3 +1,6 @@
+// TODO: update to new API
+// TODO: support multiplayer
+
 function randomInt(min, max) {
     if (!max) {
         max = min;

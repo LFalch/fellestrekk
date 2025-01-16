@@ -1,6 +1,8 @@
 use crate::fellestrekk::{Command, CommandQueue, PlayerId};
 
 pub trait Game {
+    fn join(&mut self, _pid: PlayerId) {}
+    fn leave(&mut self, _pid: PlayerId) {}
     fn has_space(&self) -> bool {
         false
     }

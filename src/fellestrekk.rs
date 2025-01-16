@@ -1,4 +1,3 @@
-use collect_result::CollectResult;
 use rocket::tokio::sync::{RwLock, RwLockReadGuard};
 use rocket::State;
 
@@ -46,11 +45,14 @@ impl Session {
             game,
         }
     }
-    fn send_command(&self, cmd: Command) -> SendResult<()> {
+    fn broadcast_command(&self, cmd: Command) -> SendResult<()> {
         for player in self.players.values() {
             player.send(cmd.clone())?;
         }
         Ok(())
+    }
+    fn send_to(&self, target: PlayerId, cmd: Command) -> SendResult<()> {
+        self.players[&target.0].send(cmd)
     }
     /// Whether any player has left (which should end the session)
     fn is_empty(&self) -> bool {
@@ -60,7 +62,9 @@ impl Session {
         if self.game.has_space() {
             let new_key = 1 + *self.players.last_key_value().unwrap().0;
             self.players.insert(new_key, player);
-            Some(PlayerId(new_key))
+            let pid = PlayerId(new_key);
+            self.game.join(pid);
+            Some(pid)
         } else {
             None
         }
@@ -113,7 +117,7 @@ pub enum Command {
     // Blackjack
     ValueUpdate(Option<PlayerId>, u8, bool),
     DealerDraw(Card),
-    RevealDowns(Card, Vec<Card>),
+    RevealDown(Option<PlayerId>, Card),
     DownCard(Card),
     Status{
         hit: bool,
@@ -156,10 +160,13 @@ impl FromStr for Command {
             "TAKEMONEY" => Ok(Command::TakeMoney(split.next().and_then(|s| s.parse().ok()).ok_or(())?)),
             "SENDMONEY" => Ok(Command::SendMoney(split.next().and_then(|s| s.parse().ok()).ok_or(())?)),
             "DRAW" => Ok(Command::Draw),
-            "REVEALDOWNS" => Ok(Command::RevealDowns(
-                Card::from_u8(split.next().ok_or(())?.parse().map_err(|_| ())?),
-                split.map(|c| c.parse().map_err(|_| ()).map(Card::from_u8)).collect_result::<Vec<_>>()?,
-            )),
+            "REVEALDOWN" => {
+                let card = Card::from_u8(split.next_back().ok_or(())?.parse().map_err(|_| ())?);
+                let player = if let Some(p) = split.next() {
+                    Some(PlayerId(u32::from_str(p).map_err(|_| ())?))
+                } else { None };
+                Ok(Command::RevealDown(player, card))
+            },
             "PLAYERDRAW" => Ok(Command::PlayerDraw(
                 PlayerId(u32::from_str(split.next().ok_or(())?).map_err(|_| ())?),
                 Card::from_u8(split.next().ok_or(())?.parse().map_err(|_| ())?)
@@ -247,12 +254,12 @@ impl Display for Command {
                 write!(f, "DOWNCARD {c}")?;
                 Ok(())
             }
-            Command::RevealDowns(c, ps) => {
-                write!(f, "REVEALDOWNS {c}")?;
-                for p in ps {
-                    write!(f, " {p}")?;
+            Command::RevealDown(p, c) => {
+                write!(f, "REVEALDOWN")?;
+                if let Some(p) = p {
+                    write!(f, " {}", p.0)?;
                 }
-                Ok(())
+                write!(f, " {c}")
             }
             Command::Stand => write!(f, "STAND"),
             Command::Hit => write!(f, "HIT"),
@@ -302,19 +309,27 @@ impl Display for Command {
 }
 
 pub struct CommandQueue<'a> {
-    inner: &'a mut Vec<Command>,
+    reply_channel: UnboundedSender<Command>,
+    send_queue: &'a mut Vec<(Option<PlayerId>, Command)>,
 }
 
 impl<'a> CommandQueue<'a> {
-    fn new<'b: 'a>(inner: &'b mut Vec<Command>) -> CommandQueue<'a> {
-        Self {inner}
+    fn new<'b: 'a>(reply_channel: UnboundedSender<Command>, send_queue: &'a mut Vec<(Option<PlayerId>, Command)>) -> CommandQueue<'a> {
+        Self {reply_channel, send_queue}
     }
-    pub(crate) fn send(&mut self, cmd: Command) {
-        self.inner.push(cmd);
+    pub fn reply(&mut self, cmd: Command) {
+        self.reply_channel.send(cmd).unwrap();
     }
-    pub(crate) fn reborrow<'b>(&'b mut self) -> CommandQueue<'b> {
+    pub fn send_to(&mut self, id: PlayerId, cmd: Command) {
+        self.send_queue.push((Some(id), cmd));
+    }
+    pub fn broadcast(&mut self, cmd: Command) {
+        self.send_queue.push((None, cmd));
+    }
+    pub fn reborrow<'b>(&'b mut self) -> CommandQueue<'b> {
         CommandQueue {
-            inner: self.inner
+            reply_channel: self.reply_channel.clone(),
+            send_queue: self.send_queue,
         }
     }
 }
@@ -375,16 +390,20 @@ pub fn ws(ws: WebSocket, session_store: &State<SessionStore>) -> Channel<'static
 
         let mut buf = Vec::with_capacity(16);
 
-        let mut cmds = Vec::new();
+        let mut broadcast_cmds = Vec::new();
         loop {
             {
                 let Some(session_mutex) = sessions.get(code).await else {break;};
                 let mut session = session_mutex.lock().unwrap();
-                if session.game.tick(CommandQueue::new(&mut cmds)) {
+                if session.game.tick(CommandQueue::new(tx.clone(), &mut broadcast_cmds)) {
                     continue;
                 }
-                for cmd in cmds.drain(..) {
-                    session.send_command(cmd).unwrap();
+                for (target, cmd) in broadcast_cmds.drain(..) {
+                    if let Some(target) = target {
+                        session.send_to(target, cmd).unwrap();
+                    } else {
+                        session.broadcast_command(cmd).unwrap();
+                    }
                 }
             }
             select! {
@@ -412,10 +431,10 @@ pub fn ws(ws: WebSocket, session_store: &State<SessionStore>) -> Channel<'static
                     match cmd {
                         Command::Chat(msg) => {
                             if !msg.is_empty() {
-                                session.send_command(Command::ChatMsg(pid, msg)).unwrap();
+                                session.broadcast_command(Command::ChatMsg(pid, msg)).unwrap();
                             }
                         }
-                        cmd => session.game.handle(pid, cmd, CommandQueue::new(&mut cmds)),
+                        cmd => session.game.handle(pid, cmd, CommandQueue::new(tx.clone(), &mut broadcast_cmds)),
                     }
                 }
             }
