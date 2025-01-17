@@ -1,6 +1,6 @@
 use std::{cmp::Ordering::{Equal, Greater, Less}, collections::BTreeMap};
 
-use crate::{card::{Card, Deck, Rank, Suit}, dealer::Dealer, fellestrekk::{Command, CommandQueue, PlayerId}, hand::{BlackjackExt, Hand}};
+use crate::{card::{Card, Deck}, dealer::Dealer, fellestrekk::{Command, CommandQueue, PlayerId}, hand::{BlackjackExt, Hand}};
 use super::Game;
 
 type Money = u32;
@@ -168,6 +168,8 @@ impl Game for Blackjack {
                 let mut hand_is_over = false;
                 let mut lost = false;
                 let mut doubled = false;
+                let mut split = false;
+                let mut split_hand_can_split = false;
 
                 match cmd {
                     Command::Hit => {
@@ -209,8 +211,26 @@ impl Game for Blackjack {
                         }
                     }
                     Command::Split => {
-                        // do split
-                        return;
+                        split = true;
+                        let (one, two) = match current_hand.hand.cards() {
+                            &[one, two] if one.suit_rank().1 == two.suit_rank().1 => (one, two),
+                            _ => return
+                        };
+
+                        current_hand.hand = Hand::new([one]);
+                        let card = draw_card(&mut self.deck, &mut self.dirty_deck);
+                        current_hand.hand.add_card(card);
+                        cmds.broadcast(Command::PlayerDraw(pid, card));
+                        cmds.broadcast(Command::ValueUpdate(Some(pid), current_hand.hand.value(), current_hand.hand.is_soft()));
+                        let cards = current_hand.hand.cards();
+                        split_hand_can_split = cards[0].suit_rank().1 == cards[1].suit_rank().1;
+                        
+                        let card = draw_card(&mut self.deck, &mut self.dirty_deck);
+                        cmds.broadcast(Command::SplitHandDraw(pid, card));
+                        hands_to_play.insert(hands_to_play.len() - 1, PlayHand {
+                            player: pid,
+                            hand: Hand::new([two, card]),
+                        });
                     }
                     _ => return,
                 }
@@ -235,6 +255,8 @@ impl Game for Blackjack {
                     } else {
                         self.notify_new_hand(cmds);
                     }
+                } else if split {
+                    cmds.reply(Command::status_new(split_hand_can_split));
                 } else {
                     cmds.reply(Command::status_mid_hand());
                 }
@@ -249,9 +271,7 @@ fn draw_card(deck: &mut Deck, dirty_deck: &mut bool) -> Card {
     deck.draw_one().unwrap()
 }
 
-// TODO: make splits work
 // TODO: announce bets
-// TODO: send back the status of the game to players (and what they can do)
 impl Blackjack {
     pub fn new() -> Blackjack {
         Blackjack {

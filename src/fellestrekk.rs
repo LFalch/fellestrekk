@@ -132,6 +132,7 @@ pub enum Command {
     DoubleDown,
     Surrender,
     Split,
+    SplitHandDraw(PlayerId, Card),
     // Misc
     ChatMsg(PlayerId, String),
     Chat(String),
@@ -278,6 +279,7 @@ impl Display for Command {
             Command::DoubleDown => write!(f, "DOUBLEDOWN"),
             Command::Surrender => write!(f, "SURRENDER"),
             Command::Split => write!(f, "SPLIT"),
+            Command::SplitHandDraw(p, c) => write!(f, "SPLITHANDDRAW {} {c}", p.0),
             &Command::ValueUpdate(pn, value, soft) => {
                 write!(f, "VALUEUPDATE")?;
                 if let Some(pid) = pn {
